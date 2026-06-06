@@ -52,16 +52,18 @@ function initData(){
     {id:'u3',nombre:'Cocina',usuario:'cocina',pass:'cocina123',rol:'cocina',activo:true,creado:now()},
   ]);
   if(!DB.get('productos')) DB.set('productos',[
-    {id:'p1',nombre:'Arroz Especial',precio:18000,cat:'Arroces',activo:true},
-    {id:'p2',nombre:'Chow Mein',precio:16000,cat:'Arroces',activo:true},
-    {id:'p3',nombre:'Costilla BBQ',precio:28000,cat:'Carnes',activo:true},
-    {id:'p4',nombre:'Pollo Agridulce',precio:22000,cat:'Carnes',activo:true},
-    {id:'p5',nombre:'Camarones al Vapor',precio:32000,cat:'Mariscos',activo:true},
-    {id:'p6',nombre:'Sopa Wonton',precio:14000,cat:'Sopas',activo:true},
-    {id:'p7',nombre:'Té Chino',precio:5000,cat:'Bebidas',activo:true},
-    {id:'p8',nombre:'Gaseosa',precio:4000,cat:'Bebidas',activo:true},
-    {id:'p9',nombre:'Pato Laqueado',precio:45000,cat:'Especiales',activo:true},
-    {id:'p10',nombre:'Rollos Primavera',precio:10000,cat:'Extras',activo:true},
+    {id:'p1',nombre:'Rollos Primavera',precio:10000,cat:'Entremeses',activo:true},
+    {id:'p2',nombre:'Chowfan Especial',precio:18000,cat:'Chowfan',activo:true},
+    {id:'p3',nombre:'Chopsuey de Pollo',precio:17000,cat:'Chopsuey',activo:true},
+    {id:'p4',nombre:'Lomein Especial',precio:18000,cat:'Lomein',activo:true},
+    {id:'p5',nombre:'Plato Combinado #1',precio:22000,cat:'Platos Combinados',activo:true},
+    {id:'p6',nombre:'Costilla BBQ',precio:28000,cat:'Costillas',activo:true},
+    {id:'p7',nombre:'Pollo Agridulce',precio:22000,cat:'Pollo',activo:true},
+    {id:'p8',nombre:'Plato Personal Pollo',precio:15000,cat:'Platos Personales',activo:true},
+    {id:'p9',nombre:'Combo Familiar 4 Personas',precio:60000,cat:'Combos Familiares',activo:true},
+    {id:'p10',nombre:'Gaseosa',precio:4000,cat:'Bebidas',activo:true},
+    {id:'p11',nombre:'Promo del Mes',precio:20000,cat:'Promo del Mes',activo:true},
+    {id:'p12',nombre:'Porción Arroz',precio:6000,cat:'Adicionales',activo:true},
   ]);
   if(!DB.get('ventas')) DB.set('ventas',[]);
   if(!DB.get('clientes')) DB.set('clientes',[]);
@@ -82,7 +84,7 @@ function initData(){
 
 // ========================= STATE =========================
 const STATE = { user:null, page:'dashboard', order:[], descuento:0, descMot:'',
-  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, orderObs:'', editandoVenta:null };
+  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, propina:0, orderObs:'', editandoVenta:null };
 
 // ========================= AUTH =========================
 function doLogin(){
@@ -438,6 +440,7 @@ function printFactura(v){
   <hr style="border:1px dashed #000;margin:6px 0;">
   ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
   ${v.descuento>0?`<div style="display:flex;justify-content:space-between;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
+  ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina voluntaria</span><span>${fmtMoney(v.propina)}</span></div>`:''}
   <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:15px;"><span>TOTAL</span><span>${fmtMoney(v.total)}</span></div>
   <div style="text-align:center;margin-top:8px;font-size:11px;">Método: ${v.metodo}<br>¡Gracias por su visita!</div>`;
   pa.style.display='block'; window.print(); pa.style.display='none';
@@ -509,22 +512,31 @@ function editarPedido(id){
   showPage('ventas');
 }
 
-let cobrandoMesaId=null;
+let cobrandoMesaId=null, cobroBaseTotal=0;
 function abrirCobroMesa(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  cobrandoMesaId=id;
-  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(v.mesa)}</strong> · ${v.items.length} platos · Total <span class="text-gold font-bold">${fmtMoney(v.total)}</span>`;
+  cobrandoMesaId=id; cobroBaseTotal=v.total;
+  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(v.mesa)}</strong> · ${v.items.length} platos · Subtotal <span class="text-gold font-bold">${fmtMoney(v.total)}</span>`;
+  const p=document.getElementById('cobro-propina'); if(p) p.value=0;
   openModal('modal-cobro');
+  actualizarTotalCobro();
+}
+function actualizarTotalCobro(){
+  const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
+  const el=document.getElementById('cobro-total-final');
+  if(el) el.textContent=fmtMoney(cobroBaseTotal+propina);
 }
 function confirmarCobroMesa(){
   const id=cobrandoMesaId; if(!id) return;
   const metodo=document.getElementById('cobro-metodo').value;
+  const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
   const vs=DB.get('ventas')||[];
   const v=vs.find(x=>x.id===id); if(!v){ closeModal('modal-cobro'); return; }
+  v.propina=propina; v.total=v.total+propina;
   v.estado='pagada'; v.metodo=metodo; v.factura=nextFactura(); v.fechaCobro=now();
   v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
   DB.set('ventas',vs);
-  logAudit('Cobró mesa',`${v.mesa} → ${v.factura} - ${fmtMoney(v.total)} (${metodo})`);
+  logAudit('Cobró mesa',`${v.mesa} → ${v.factura} - ${fmtMoney(v.total)} (${metodo})${propina>0?' propina '+fmtMoney(propina):''}`);
   closeModal('modal-cobro'); cobrandoMesaId=null;
   toast(`${v.mesa} cobrada: ${v.factura}`,'success');
   printFactura(v);
@@ -798,7 +810,7 @@ function menu(){
     </tbody></table></div></div>`;
 }
 function openModalProducto(id){
-  ['p-nombre','p-precio','p-desc'].forEach(i=>document.getElementById(i).value=''); document.getElementById('edit-prod-id').value=''; document.getElementById('p-cat').value='Arroces';
+  ['p-nombre','p-precio','p-desc'].forEach(i=>document.getElementById(i).value=''); document.getElementById('edit-prod-id').value=''; document.getElementById('p-cat').value='Entremeses';
   if(id){ const p=(DB.get('productos')||[]).find(x=>x.id===id); if(p){ document.getElementById('edit-prod-id').value=p.id;
     document.getElementById('p-nombre').value=p.nombre; document.getElementById('p-precio').value=p.precio; document.getElementById('p-cat').value=p.cat; }}
   document.getElementById('modal-prod-title').innerHTML=ic('i-menu-food')+(id?' Editar Producto':' Nuevo Producto');
@@ -864,7 +876,7 @@ function buildModals(){
 
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
 
-  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
+  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Propina voluntaria (COP)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
@@ -872,7 +884,7 @@ function buildModals(){
 
   <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="cajero" selected>Cajero</option><option value="supervisor">Supervisor</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
 
-  <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Arroces</option><option>Carnes</option><option>Mariscos</option><option>Sopas</option><option>Bebidas</option><option>Especiales</option><option>Extras</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
+  <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Entremeses</option><option>Chowfan</option><option>Chopsuey</option><option>Lomein</option><option>Platos Combinados</option><option>Costillas</option><option>Pollo</option><option>Platos Personales</option><option>Combos Familiares</option><option>Bebidas</option><option>Promo del Mes</option><option>Adicionales</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
 }
 
 // ========================= CLOCK / TIMERS =========================
