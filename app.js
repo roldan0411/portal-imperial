@@ -21,6 +21,8 @@ function fmtMoney(n){ return '$ '+(Math.round(n)||0).toLocaleString('es-CO'); }
 function uid(){ return '_'+Math.random().toString(36).substr(2,9); }
 function today(){ return new Date().toISOString().split('T')[0]; }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
+function esPagada(v){ return v.estado==='pagada'; }
 
 function nextFactura(){ const n=(DB.get('factura_seq')||0)+1; DB.set('factura_seq',n); return 'PI-'+String(n).padStart(6,'0'); }
 
@@ -182,19 +184,19 @@ function showPage(name){
 // ========================= DASHBOARD =========================
 function dashboard(){
   const vs=DB.get('ventas')||[]; const t=today();
-  const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&v.estado!=='anulada');
+  const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v));
   const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
   const weekAgo=new Date(Date.now()-7*864e5).toISOString().split('T')[0];
-  const sem=vs.filter(v=>v.fecha>=weekAgo&&v.estado!=='anulada');
+  const sem=vs.filter(v=>v.fecha>=weekAgo&&esPagada(v));
   const ma=new Date(); ma.setDate(1);
-  const mes=vs.filter(v=>v.fecha>=ma.toISOString().split('T')[0]&&v.estado!=='anulada');
+  const mes=vs.filter(v=>v.fecha>=ma.toISOString().split('T')[0]&&esPagada(v));
   const activos=vs.filter(v=>v.estadoPedido==='activo'&&v.estado!=='anulada').length;
   const entregados=vs.filter(v=>v.estadoPedido==='entregado').length;
   const metodos={efectivo:0,nequi:0,daviplata:0,tarjeta:0};
   hoy.forEach(v=>{ if(metodos[v.metodo]!==undefined) metodos[v.metodo]+=v.total; });
   const days=[];
   for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5); const dk=d.toISOString().split('T')[0];
-    days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&v.estado!=='anulada').reduce((a,v)=>a+v.total,0)}); }
+    days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)).reduce((a,v)=>a+v.total,0)}); }
   const mx=Math.max(...days.map(d=>d.tot),1);
   const bars=days.map(d=>`<div class="bar-item"><div class="bar-val">${d.tot>0?(d.tot/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.tot/mx)*90)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('');
   return `
@@ -222,7 +224,7 @@ function refPedido(v){
   if(v.tipo==='domicilio') return v.domiciliario?escapeHtml(v.domiciliario):(v.cliNombre?escapeHtml(v.cliNombre):'Domicilio');
   return v.factura||'—';
 }
-function estadoBadge(e){ return e==='anulada'?`<span class="badge badge-red">Anulada</span>`:e==='pagada'?`<span class="badge badge-green">Pagada</span>`:`<span class="badge badge-gold">${e||'activa'}</span>`; }
+function estadoBadge(e){ return e==='anulada'?`<span class="badge badge-red">Anulada</span>`:e==='pagada'?`<span class="badge badge-green">Pagada</span>`:e==='abierta'?`<span class="badge badge-orange">Abierta</span>`:`<span class="badge badge-gold">${e||'activa'}</span>`; }
 
 // ========================= VENTAS (POS) =========================
 function ventas(){
@@ -335,9 +337,12 @@ function renderOrderPanel(){
     <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>Total</span><span class="text-gold">${fmtMoney(total)}</span></div>
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
-      <select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select>
+      ${STATE.tipoPedido==='mesa'?'':`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select>`}
     </div>
-    <button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(total)}</button>`;
+    ${STATE.tipoPedido==='mesa'
+      ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
+         <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">La mesa queda abierta. Se cobra al final desde Pedidos.</p>`
+      : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(total)}</button>`}`;
 }
 function applyDescuento(){
   const tipo=document.getElementById('desc-tipo').value, val=parseFloat(document.getElementById('desc-valor').value)||0;
@@ -346,11 +351,47 @@ function applyDescuento(){
   closeModal('modal-descuento'); renderOrderPanel(); toast('Descuento aplicado','success');
 }
 
+function guardarMesa(){
+  if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
+  if(!STATE.mesa){ toast('Seleccione una mesa','error'); return; }
+  const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
+  const total=Math.max(0,subtotal-(STATE.descuento||0));
+  const vs=DB.get('ventas')||[];
+
+  if(STATE.editandoVenta){
+    // Actualizar mesa existente: marcar platos nuevos como pendientes para cocina
+    const v=vs.find(x=>x.id===STATE.editandoVenta.id);
+    if(v){
+      v.items=[...STATE.order]; v.subtotal=subtotal; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
+      v.total=total; v.obs=STATE.orderObs; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
+      v.estadoCocina='pendiente'; // vuelve a cocina por si agregó/quitó platos
+      DB.set('ventas',vs);
+      logAudit('Actualizó mesa',`${v.mesa} por ${STATE.user.nombre}`);
+      notifyKitchen();
+      toast('Mesa actualizada y enviada a cocina','success');
+      printTicketCocina(v);
+    }
+    clearOrder(); showPage('pedidos'); return;
+  }
+
+  // Nueva mesa abierta (sin número de factura todavía, sin cobrar)
+  const venta={ id:uid(), factura:'', fecha:now(), tipo:'mesa', mesa:STATE.mesa,
+    cliNombre:'',cliTel:'',cliDir:'',cliBarrio:'', valorDom:0,
+    items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
+    total, metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
+    obs:STATE.orderObs, cajero:STATE.user?.nombre, cajaId:DB.get('caja_actual')?.id||null };
+  vs.unshift(venta); DB.set('ventas',vs);
+  logAudit('Abrió mesa',STATE.mesa);
+  notifyKitchen();
+  clearOrder();
+  toast(`${venta.mesa} abierta y enviada a cocina`,'success');
+  printTicketCocina(venta);
+}
+
 function cobrarVenta(){
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
   if(STATE.tipoPedido==='domicilio' && (!STATE.cliNombre||!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio requiere nombre, teléfono y dirección','error'); return; }
   if(STATE.tipoPedido==='llevar' && !STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
-  if(STATE.tipoPedido==='mesa' && !STATE.mesa){ toast('Seleccione una mesa','error'); return; }
   const metodo=document.getElementById('pay-method')?.value||'efectivo';
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
@@ -431,18 +472,21 @@ function renderPedidosTable(vs){
   let list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q));
   if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin pedidos</p></div>`;
   const isAdmin=STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
-  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido / Mensajero</th><th>Tipo</th><th>Cliente/Mesa</th><th>Total</th><th>Cocina</th><th>Pedido</th><th>Domiciliario</th><th>Acciones</th></tr></thead><tbody>
+  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido / Mensajero</th><th>Tipo</th><th>Cliente/Mesa</th><th>Total</th><th>Cobro</th><th>Cocina</th><th>Pedido</th><th>Domiciliario</th><th>Acciones</th></tr></thead><tbody>
   ${list.map(v=>{
     const editable = isAdmin || (v.estadoCocina!=='entregado' && v.estadoPedido!=='entregado');
-    return `<tr>
+    const abierta = v.estado==='abierta';
+    return `<tr ${abierta?'style="background:rgba(212,175,55,0.06)"':''}>
     <td><span class="text-gold font-bold">${refPedido(v)}</span>${v.modificadoPor?`<br><span class="text-xs text-gray">editado: ${escapeHtml(v.modificadoPor)}</span>`:''}</td>
     <td>${tipoLabel(v.tipo)}</td>
     <td>${escapeHtml(v.cliNombre||v.mesa||'—')}${v.cliTel?`<br><span class="text-xs text-gray">${escapeHtml(v.cliTel)}</span>`:''}</td>
     <td class="font-bold">${fmtMoney(v.total)}</td>
+    <td>${abierta?'<span class="badge badge-orange">Abierta</span>':'<span class="badge badge-green">Pagada</span>'}</td>
     <td>${cocinaBadge(v.estadoCocina)}</td>
     <td><select onchange="setEstadoPedido('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="activo" ${v.estadoPedido==='activo'?'selected':''}>Activo</option><option value="entregado" ${v.estadoPedido==='entregado'?'selected':''}>Entregado</option></select></td>
     <td>${v.tipo==='domicilio'?domiciliarioSelect(v):'—'}</td>
     <td style="display:flex;gap:5px;flex-wrap:wrap;">
+      ${abierta?`<button class="btn btn-success btn-sm" onclick="abrirCobroMesa('${v.id}')" title="Cobrar y cerrar">${ic('i-cash')} Cobrar</button>`:''}
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
       ${isAdmin?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="Anular">${ic('i-ban')}</button>`:''}
@@ -463,6 +507,28 @@ function editarPedido(id){
   STATE.cliNombre=v.cliNombre||''; STATE.cliTel=v.cliTel||''; STATE.cliDir=v.cliDir||''; STATE.cliBarrio=v.cliBarrio||'';
   STATE.valorDom=v.valorDom||0; STATE.descuento=v.descuento||0; STATE.descMot=v.descMot||''; STATE.orderObs=v.obs||'';
   showPage('ventas');
+}
+
+let cobrandoMesaId=null;
+function abrirCobroMesa(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  cobrandoMesaId=id;
+  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(v.mesa)}</strong> · ${v.items.length} platos · Total <span class="text-gold font-bold">${fmtMoney(v.total)}</span>`;
+  openModal('modal-cobro');
+}
+function confirmarCobroMesa(){
+  const id=cobrandoMesaId; if(!id) return;
+  const metodo=document.getElementById('cobro-metodo').value;
+  const vs=DB.get('ventas')||[];
+  const v=vs.find(x=>x.id===id); if(!v){ closeModal('modal-cobro'); return; }
+  v.estado='pagada'; v.metodo=metodo; v.factura=nextFactura(); v.fechaCobro=now();
+  v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
+  DB.set('ventas',vs);
+  logAudit('Cobró mesa',`${v.mesa} → ${v.factura} - ${fmtMoney(v.total)} (${metodo})`);
+  closeModal('modal-cobro'); cobrandoMesaId=null;
+  toast(`${v.mesa} cobrada: ${v.factura}`,'success');
+  printFactura(v);
+  showPage('pedidos');
 }
 function anularVenta(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
@@ -540,7 +606,7 @@ function caja(){
       ${cierres.length>0?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Efectivo</th><th>Nequi</th><th>Daviplata</th><th>Tarjeta</th><th>Gastos</th><th>Total Ventas</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,10).map(c=>`<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td>${fmtMoney(c.efectivo)}</td><td>${fmtMoney(c.nequi)}</td><td>${fmtMoney(c.daviplata)}</td><td>${fmtMoney(c.tarjeta)}</td><td class="text-red">${fmtMoney(c.gastos||0)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`).join('')}</tbody></table></div></div>`:''}`;
   }
   const movs=c.movimientos||[];
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.cajaId===c.id);
+  const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
   const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
   const nq=vs.filter(v=>v.metodo==='nequi').reduce((a,v)=>a+v.total,0);
   const dp=vs.filter(v=>v.metodo==='daviplata').reduce((a,v)=>a+v.total,0);
@@ -598,7 +664,7 @@ function toggleEmpleadoField(){
 function cerrarCaja(){
   if(!confirm('¿Cerrar la caja? Se generará el reporte de cierre del empleado.')) return;
   const c=DB.get('caja_actual');
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.cajaId===c.id);
+  const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
   const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
   const nq=vs.filter(v=>v.metodo==='nequi').reduce((a,v)=>a+v.total,0);
   const dp=vs.filter(v=>v.metodo==='daviplata').reduce((a,v)=>a+v.total,0);
@@ -691,11 +757,11 @@ function renderHistTable(vs){
 // ========================= REPORTES =========================
 function reportes(){
   const vs=DB.get('ventas')||[]; const t=today();
-  const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&v.estado!=='anulada'); const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
+  const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v)); const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
   const weekly=[]; for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5); const dk=d.toISOString().split('T')[0];
-    const p=vs.filter(v=>v.fecha?.startsWith(dk)&&v.estado!=='anulada'); weekly.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
+    const p=vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)); weekly.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
   const monthly=[]; for(let i=11;i>=0;i--){ const d=new Date(); d.setMonth(d.getMonth()-i); d.setDate(1); const mk=d.toISOString().substring(0,7);
-    const p=vs.filter(v=>v.fecha?.startsWith(mk)&&v.estado!=='anulada'); monthly.push({lbl:d.toLocaleDateString('es-CO',{month:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
+    const p=vs.filter(v=>v.fecha?.startsWith(mk)&&esPagada(v)); monthly.push({lbl:d.toLocaleDateString('es-CO',{month:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
   const mw=Math.max(...weekly.map(d=>d.total),1), mm=Math.max(...monthly.map(d=>d.total),1);
   const items={}; hoy.forEach(v=>v.items?.forEach(i=>{ if(!items[i.nombre])items[i.nombre]={qty:0,total:0}; items[i.nombre].qty+=i.qty; items[i.nombre].total+=i.precio*i.qty; }));
   const top=Object.entries(items).sort((a,b)=>b[1].qty-a[1].qty).slice(0,10);
@@ -797,6 +863,8 @@ function buildModals(){
   <div id="modal-descuento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:350px;"><div class="modal-header"><h3>${ic('i-tag')} Aplicar Descuento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-descuento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="desc-tipo"><option value="pct">Porcentaje (%)</option><option value="fijo">Valor fijo (COP)</option></select></div><div class="form-group"><label>Valor</label><input type="number" id="desc-valor" placeholder="0" min="0"></div><div class="form-group"><label>Motivo</label><input type="text" id="desc-motivo" placeholder="Razón"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-descuento')">Cancelar</button><button class="btn btn-gold" onclick="applyDescuento()">Aplicar</button></div></div></div>
 
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
+
+  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
