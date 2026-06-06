@@ -1,7 +1,18 @@
 // ========================= PORTAL IMPERIAL POS =========================
+// ---- CAPA DE DATOS: cache en memoria sincronizado con Firebase en tiempo real ----
+const CACHE = {};            // copia local de todos los datos
+let FB_READY = false;        // ¿ya cargó Firebase?
+let fbDB = null;             // referencia a la base de datos
+
 const DB = {
-  get(k){ try { return JSON.parse(localStorage.getItem('pi_'+k)); } catch(e){ return null; } },
-  set(k,v){ localStorage.setItem('pi_'+k, JSON.stringify(v)); },
+  get(k){ return (k in CACHE) ? CACHE[k] : null; },
+  set(k,v){
+    CACHE[k] = v;
+    try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
+    if(FB_READY && fbDB){
+      try { fbDB.ref('data/'+k).set(v===undefined?null:v); } catch(e){ console.warn('FB set',e); }
+    }
+  },
 };
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
 function now(){ return new Date().toISOString(); }
@@ -59,7 +70,7 @@ function initData(){
     {id:'d2',nombre:'Carlos Gómez',activo:true},
     {id:'d3',nombre:'Luis Rodríguez',activo:true},
   ]);
-  if(DB.get('caja_actual')===null && DB.get('caja_actual')!==false) { if(localStorage.getItem('pi_caja_actual')===null) DB.set('caja_actual',null); }
+  if(!('caja_actual' in CACHE)) DB.set('caja_actual',null);
   if(!DB.get('factura_seq')) DB.set('factura_seq',0);
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
@@ -163,7 +174,8 @@ function showPage(name){
   document.getElementById('sidebar').classList.remove('open');
   const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
-  if(name==='ventas'){ STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
+  if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
+  else { ESCRIBIENDO=false; }
   updateBadges();
 }
 
@@ -805,9 +817,81 @@ document.addEventListener('keydown',()=>lastAct=Date.now());
 document.addEventListener('touchstart',()=>lastAct=Date.now());
 setInterval(()=>{ if(STATE.user && Date.now()-lastAct>30*60*1000){ toast('Sesión cerrada por inactividad'); doLogout(); }},60000);
 
-// ========================= BOOT =========================
-initData();
-buildModals();
-updateClock();
-document.getElementById('login-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
-document.getElementById('login-user').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('login-pass').focus(); });
+// ========================= BOOT con FIREBASE =========================
+const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config'];
+
+function showConexion(estado){
+  let el=document.getElementById('fb-status');
+  if(!el){ el=document.createElement('div'); el.id='fb-status'; el.style.cssText='position:fixed;bottom:10px;left:10px;z-index:9998;font-size:11px;padding:5px 10px;border-radius:20px;font-family:Inter,sans-serif;'; document.body.appendChild(el); }
+  if(estado==='ok'){ el.style.background='rgba(39,174,96,0.2)'; el.style.color='#2ECC71'; el.style.border='1px solid rgba(39,174,96,0.4)'; el.textContent='● Sincronizado'; }
+  else if(estado==='off'){ el.style.background='rgba(192,57,43,0.2)'; el.style.color='#E74C3C'; el.style.border='1px solid rgba(192,57,43,0.4)'; el.textContent='● Sin conexión (modo local)'; }
+  else { el.style.background='rgba(212,175,55,0.2)'; el.style.color='#D4AF37'; el.style.border='1px solid rgba(212,175,55,0.4)'; el.textContent='● Conectando...'; }
+}
+
+function bootApp(){
+  buildModals();
+  updateClock();
+  document.getElementById('login-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+  document.getElementById('login-user').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('login-pass').focus(); });
+}
+
+function startFirebase(){
+  showConexion('conectando');
+  // Cargar respaldo local primero (arranque instantáneo)
+  FIREBASE_KEYS.forEach(k=>{ try{ const v=localStorage.getItem('pi_'+k); if(v!==null) CACHE[k]=JSON.parse(v); }catch(e){} });
+
+  try {
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+    fbDB = firebase.database();
+  } catch(e){
+    console.error('Firebase init falló:', e);
+    showConexion('off'); FB_READY=false; initData(); bootApp(); return;
+  }
+
+  // Estado de conexión
+  fbDB.ref('.info/connected').on('value', s=>{ showConexion(s.val()?'ok':'off'); });
+
+  // Carga inicial completa
+  fbDB.ref('data').once('value').then(snap=>{
+    const data = snap.val() || {};
+    FIREBASE_KEYS.forEach(k=>{ if(data[k]!==undefined && data[k]!==null) CACHE[k]=data[k]; });
+    FB_READY = true;
+    initData();           // crea datos por defecto solo si faltan (los sube a FB)
+    listenRealtime();     // escucha cambios de otros dispositivos
+    bootApp();
+  }).catch(e=>{
+    console.error('Carga inicial FB falló:', e);
+    showConexion('off'); FB_READY=true; initData(); bootApp();
+  });
+}
+
+// Escuchar cambios en tiempo real desde otros dispositivos
+function listenRealtime(){
+  FIREBASE_KEYS.forEach(k=>{
+    fbDB.ref('data/'+k).on('value', snap=>{
+      const v = snap.val();
+      if(v===null || v===undefined) return;
+      CACHE[k] = v;
+      try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
+      // Si el usuario está dentro y NO está escribiendo una venta, refrescar la pantalla
+      if(STATE.user && !ESCRIBIENDO){
+        if(STATE.page!=='ventas'){ try{ showPage(STATE.page); }catch(e){} }
+        updateBadges();
+      }
+    });
+  });
+}
+
+// Bandera para no refrescar mientras se arma un pedido
+let ESCRIBIENDO = false;
+
+// Arranque: esperar a que cargue la librería de Firebase
+window.addEventListener('load', ()=>{
+  if(typeof firebase==='undefined' || !window.FIREBASE_CONFIG){
+    console.warn('Firebase no disponible, modo local');
+    showConexion('off');
+    FIREBASE_KEYS.forEach(k=>{ try{ const v=localStorage.getItem('pi_'+k); if(v!==null) CACHE[k]=JSON.parse(v); }catch(e){} });
+    initData(); bootApp(); return;
+  }
+  startFirebase();
+});
