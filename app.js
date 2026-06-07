@@ -82,7 +82,8 @@ function initData(){
   if(!DB.get('marcaciones')) DB.set('marcaciones',[]);
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
-    numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false
+    numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false,
+    gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100
   });
 }
 
@@ -137,28 +138,53 @@ function asisMsg(txt,ok){
   const el=document.getElementById('asis-msg');
   el.textContent=txt; el.style.color=ok?'#2ECC71':'var(--red-light)'; el.style.display='block';
 }
+function distanciaMetros(lat1,lng1,lat2,lng2){
+  const R=6371000, rad=Math.PI/180;
+  const dLat=(lat2-lat1)*rad, dLng=(lng2-lng1)*rad;
+  const a=Math.sin(dLat/2)**2 + Math.cos(lat1*rad)*Math.cos(lat2*rad)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
 function marcar(tipo){
   const ced=document.getElementById('asis-cedula').value.trim();
   const cod=document.getElementById('asis-codigo').value.trim();
   if(!ced||!cod){ asisMsg('Ingrese cédula y código.',false); return; }
   const emp=(DB.get('empleados')||[]).find(e=>e.cedula===ced && e.codigo===cod && e.activo);
   if(!emp){ asisMsg('Cédula o código incorrectos.',false); return; }
-  const marcs=DB.get('marcaciones')||[];
 
-  // Evitar doble marcación del mismo tipo seguida
+  const cfg=DB.get('config')||{};
+  if(cfg.gpsActivo){
+    if(!navigator.geolocation){ asisMsg('Este dispositivo no permite ubicación. Avise al administrador.',false); return; }
+    asisMsg('Verificando que esté en el restaurante...',true);
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        const dist=distanciaMetros(pos.coords.latitude,pos.coords.longitude,cfg.gpsLat,cfg.gpsLng);
+        if(dist<=(cfg.gpsRadio||100)){
+          registrarMarcacion(emp,tipo);
+        } else {
+          asisMsg(`No puede marcar: está a ${Math.round(dist)} m del restaurante. Debe estar en el lugar de trabajo.`,false);
+        }
+      },
+      err=>{
+        asisMsg('Debe permitir el acceso a la ubicación para marcar. Active el GPS e intente de nuevo.',false);
+      },
+      {enableHighAccuracy:true, timeout:10000, maximumAge:0}
+    );
+  } else {
+    registrarMarcacion(emp,tipo);
+  }
+}
+function registrarMarcacion(emp,tipo){
+  const marcs=DB.get('marcaciones')||[];
   const hoyStr=today();
   const ultimaHoy=marcs.filter(m=>m.empId===emp.id && m.fecha.startsWith(hoyStr)).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))[0];
-  if(ultimaHoy && ultimaHoy.tipo===tipo){
-    asisMsg(`Ya registró ${tipo} hace un momento.`,false); return;
-  }
-
+  if(ultimaHoy && ultimaHoy.tipo===tipo){ asisMsg(`Ya registró ${tipo} hace un momento.`,false); return; }
   marcs.unshift({id:uid(),empId:emp.id,nombre:emp.nombre,cedula:emp.cedula,tipo,fecha:now()});
   DB.set('marcaciones',marcs);
   const hora=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
   asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
-  setTimeout(()=>{ if(document.getElementById('asis-msg')) document.getElementById('asis-msg').style.display='none'; }, 5000);
+  setTimeout(()=>{ const el=document.getElementById('asis-msg'); if(el) el.style.display='none'; }, 5000);
 }
 
 // ========================= SIDEBAR =========================
@@ -928,7 +954,41 @@ function config(){
       <div class="card-title">${ic('i-rider')} Domiciliarios</div>
       <div style="display:flex;gap:8px;margin-bottom:10px;"><input type="text" id="new-dom" placeholder="Nombre del domiciliario"><button class="btn btn-primary" onclick="addDomiciliario()">${ic('i-plus')}</button></div>
       ${ds.map(d=>`<div class="flex-between" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(d.nombre)}</span><button class="btn btn-danger btn-sm" onclick="delDomiciliario('${d.id}')">${ic('i-trash')}</button></div>`).join('')}
+    </div>
+    <div class="card" style="grid-column:1/-1"><div class="card-title">${ic('i-pin')} Control de Ubicación (GPS) para Asistencia</div>
+      <p class="text-sm text-gray mb-2">Si lo activas, los empleados solo podrán marcar entrada/salida cuando estén físicamente en el restaurante. Necesitan permitir el acceso a la ubicación en su celular.</p>
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-gps-activo" ${c.gpsActivo?'checked':''} style="width:auto;"> <strong>Activar control por GPS</strong></label>
+      <div class="form-grid-2 mt-1">
+        <div class="form-group"><label>Latitud del restaurante</label><input type="text" id="cfg-gps-lat" value="${c.gpsLat||''}" placeholder="Ej: 7.119349"></div>
+        <div class="form-group"><label>Longitud del restaurante</label><input type="text" id="cfg-gps-lng" value="${c.gpsLng||''}" placeholder="Ej: -73.122741"></div>
+      </div>
+      <div class="form-group"><label>Radio permitido (metros)</label><input type="number" id="cfg-gps-radio" value="${c.gpsRadio||100}" min="20" max="1000"><p class="text-xs text-gray mt-1">Distancia máxima desde el local para poder marcar. Recomendado: 80–150 m.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="usarMiUbicacion()">${ic('i-pin')} Usar mi ubicación actual</button>
+        <button class="btn btn-gold" onclick="saveGps()">${ic('i-check')} Guardar GPS</button>
+      </div>
+      <p class="text-xs text-gray mt-2">Consejo: párate dentro del restaurante con tu celular y presiona "Usar mi ubicación actual" para llenar las coordenadas automáticamente.</p>
     </div></div>`;
+}
+function usarMiUbicacion(){
+  if(!navigator.geolocation){ toast('Este dispositivo no permite ubicación','error'); return; }
+  toast('Obteniendo ubicación...','info');
+  navigator.geolocation.getCurrentPosition(
+    pos=>{ document.getElementById('cfg-gps-lat').value=pos.coords.latitude.toFixed(6);
+      document.getElementById('cfg-gps-lng').value=pos.coords.longitude.toFixed(6);
+      toast('Ubicación capturada. No olvides Guardar GPS.','success'); },
+    err=>{ toast('No se pudo obtener la ubicación. Permita el acceso al GPS.','error'); },
+    {enableHighAccuracy:true,timeout:10000,maximumAge:0}
+  );
+}
+function saveGps(){
+  const c=DB.get('config')||{};
+  c.gpsActivo=document.getElementById('cfg-gps-activo').checked;
+  c.gpsLat=parseFloat(document.getElementById('cfg-gps-lat').value)||0;
+  c.gpsLng=parseFloat(document.getElementById('cfg-gps-lng').value)||0;
+  c.gpsRadio=parseInt(document.getElementById('cfg-gps-radio').value)||100;
+  if(c.gpsActivo && (!c.gpsLat||!c.gpsLng)){ toast('Ingrese las coordenadas o use "Usar mi ubicación actual"','error'); return; }
+  DB.set('config',c); logAudit('Modificó control GPS',c.gpsActivo?'Activado':'Desactivado'); toast('Configuración GPS guardada','success');
 }
 function saveConfig(){
   const c=DB.get('config')||{};
