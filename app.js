@@ -1050,7 +1050,17 @@ function asistencia(){
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Empleado</th><th>Total Horas</th></tr></thead><tbody>
     ${Object.entries(totalHorasEmp).map(([id,h])=>{ const e=emps.find(x=>x.id===id); return `<tr><td class="font-bold">${escapeHtml(e?e.nombre:'?')}</td><td class="text-gold font-bold">${h.toFixed(2)} h</td></tr>`; }).join('')||'<tr><td colspan="2" class="text-gray">Sin horas completas aún</td></tr>'}
     </tbody></table></div>`}
-  </div>`;
+  </div>
+  ${STATE.user.rol==='admin'?`
+  <div class="card">
+    <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-edit')} Editar Marcaciones (solo admin)</div>
+      <button class="btn btn-primary btn-sm" onclick="openModalMarcacion()">${ic('i-plus')} Agregar Marcación Manual</button></div>
+    <p class="text-sm text-gray mb-2">Aquí puedes corregir, agregar o eliminar marcaciones cuando un empleado olvidó marcar o se equivocó.</p>
+    ${enRango.length===0?`<div class="empty-state">${ic('i-empty')}<p>Sin marcaciones en este periodo</p></div>`:
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Empleado</th><th>Tipo</th><th>Fecha y Hora</th><th>Acciones</th></tr></thead><tbody>
+    ${enRango.slice().reverse().map(m=>`<tr><td class="font-bold">${escapeHtml(m.nombre)}</td><td><span class="badge ${m.tipo==='entrada'?'badge-green':'badge-red'}">${m.tipo==='entrada'?'Entrada':'Salida'}</span></td><td>${fmtDate(m.fecha)}</td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalMarcacion('${m.id}')">${ic('i-edit')}</button><button class="btn btn-danger btn-sm" onclick="eliminarMarcacion('${m.id}')">${ic('i-trash')}</button></td></tr>`).join('')}
+    </tbody></table></div>`}
+  </div>`:''}`;
 }
 function calcularJornadas(marcs){
   // Empareja entrada→salida por empleado y por día
@@ -1099,6 +1109,52 @@ function saveEmpleado(){
 }
 function toggleEmpleado(id){ const emps=DB.get('empleados')||[]; const e=emps.find(x=>x.id===id); if(e){e.activo=!e.activo;DB.set('empleados',emps);} showPage('asistencia'); }
 
+// ----- Editar/agregar/eliminar marcaciones (solo admin) -----
+function openModalMarcacion(id){
+  const emps=(DB.get('empleados')||[]);
+  const sel=document.getElementById('mc-emp');
+  sel.innerHTML=emps.map(e=>`<option value="${e.id}">${escapeHtml(e.nombre)} — ${escapeHtml(e.cedula)}</option>`).join('');
+  document.getElementById('edit-mc-id').value='';
+  document.getElementById('mc-tipo').value='entrada';
+  // fecha/hora por defecto: ahora
+  const ahora=new Date(); const local=new Date(ahora.getTime()-ahora.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  document.getElementById('mc-fecha').value=local;
+  if(id){
+    const m=(DB.get('marcaciones')||[]).find(x=>x.id===id);
+    if(m){ document.getElementById('edit-mc-id').value=m.id; sel.value=m.empId; document.getElementById('mc-tipo').value=m.tipo;
+      const d=new Date(m.fecha); document.getElementById('mc-fecha').value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); }
+  }
+  document.getElementById('modal-mc-title').innerHTML=ic('i-clock')+(id?' Editar Marcación':' Agregar Marcación');
+  openModal('modal-marcacion');
+}
+function saveMarcacion(){
+  const id=document.getElementById('edit-mc-id').value;
+  const empId=document.getElementById('mc-emp').value;
+  const tipo=document.getElementById('mc-tipo').value;
+  const fechaStr=document.getElementById('mc-fecha').value;
+  if(!empId||!fechaStr){ toast('Complete empleado y fecha/hora','error'); return; }
+  const emp=(DB.get('empleados')||[]).find(e=>e.id===empId);
+  const fechaISO=new Date(fechaStr).toISOString();
+  const marcs=DB.get('marcaciones')||[];
+  if(id){
+    const m=marcs.find(x=>x.id===id);
+    if(m){ m.empId=empId; m.nombre=emp?.nombre||m.nombre; m.cedula=emp?.cedula||m.cedula; m.tipo=tipo; m.fecha=fechaISO; m.editadoPor=STATE.user.nombre; }
+    logAudit('Editó marcación',`${emp?.nombre} ${tipo} ${fmtDate(fechaISO)}`);
+  } else {
+    marcs.unshift({id:uid(),empId,nombre:emp?.nombre||'?',cedula:emp?.cedula||'',tipo,fecha:fechaISO,manual:true,creadoPor:STATE.user.nombre});
+    logAudit('Agregó marcación manual',`${emp?.nombre} ${tipo} ${fmtDate(fechaISO)}`);
+  }
+  DB.set('marcaciones',marcs);
+  closeModal('modal-marcacion'); toast('Marcación guardada','success'); showPage('asistencia');
+}
+function eliminarMarcacion(id){
+  if(!confirm('¿Eliminar esta marcación?')) return;
+  const m=(DB.get('marcaciones')||[]).find(x=>x.id===id);
+  DB.set('marcaciones',(DB.get('marcaciones')||[]).filter(x=>x.id!==id));
+  logAudit('Eliminó marcación',m?`${m.nombre} ${m.tipo} ${fmtDate(m.fecha)}`:id);
+  toast('Marcación eliminada','error'); showPage('asistencia');
+}
+
 // ========================= MODALS HTML =========================
 function buildModals(){
   document.getElementById('modals').innerHTML=`
@@ -1111,6 +1167,8 @@ function buildModals(){
   <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Propina voluntaria (COP)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
 
   <div id="modal-empleado" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-emp-title">${ic('i-users')} Nuevo Empleado</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-empleado')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-emp-id"><div class="form-grid-2"><div class="form-group" style="grid-column:1/-1"><label>Nombre completo</label><input type="text" id="e-nombre"></div><div class="form-group"><label>Cédula</label><input type="text" id="e-cedula" inputmode="numeric"></div><div class="form-group"><label>Código (para marcar)</label><input type="text" id="e-codigo" inputmode="numeric" placeholder="Ej: 1234"></div></div><p class="text-xs text-gray mt-1">El empleado usará su cédula y este código en la pantalla de marcación de entrada/salida.</p></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-empleado')">Cancelar</button><button class="btn btn-gold" onclick="saveEmpleado()">Guardar</button></div></div></div>
+
+  <div id="modal-marcacion" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3 id="modal-mc-title">${ic('i-clock')} Agregar Marcación</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-marcacion')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-mc-id"><div class="form-group"><label>Empleado</label><select id="mc-emp"></select></div><div class="form-grid-2"><div class="form-group"><label>Tipo</label><select id="mc-tipo"><option value="entrada">Entrada</option><option value="salida">Salida</option></select></div><div class="form-group"><label>Fecha y hora</label><input type="datetime-local" id="mc-fecha"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-marcacion')">Cancelar</button><button class="btn btn-gold" onclick="saveMarcacion()">Guardar</button></div></div></div>
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
