@@ -285,6 +285,34 @@ select option { background: var(--dark2); }
     <div class="mt-2" style="text-align:center;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-recovery')">¿Olvidó su contraseña?</button>
     </div>
+    <div class="mt-2" style="text-align:center;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">
+      <button class="btn btn-ghost btn-sm" onclick="mostrarAsistencia()"><svg class="ic"><use href="#i-clock"/></svg> Marcar Entrada / Salida</button>
+    </div>
+  </div>
+
+  <!-- PANTALLA DE MARCACIÓN -->
+  <div class="login-card" id="asistencia-card" style="display:none;">
+    <div class="login-logo">
+      <svg class="ic crest"><use href="#i-clock"/></svg>
+      <h1>Control de Asistencia</h1>
+      <p>Marcar Entrada / Salida</p>
+    </div>
+    <div class="form-group">
+      <label>Cédula</label>
+      <input type="text" id="asis-cedula" placeholder="Número de cédula" inputmode="numeric">
+    </div>
+    <div class="form-group">
+      <label>Código</label>
+      <input type="password" id="asis-codigo" placeholder="Su código" inputmode="numeric">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;">
+      <button class="btn btn-success btn-block" onclick="marcar('entrada')" style="padding:13px;"><svg class="ic"><use href="#i-check"/></svg> Entrada</button>
+      <button class="btn btn-danger btn-block" onclick="marcar('salida')" style="padding:13px;"><svg class="ic"><use href="#i-logout"/></svg> Salida</button>
+    </div>
+    <p class="mt-2 text-xs" id="asis-msg" style="display:none;text-align:center;"></p>
+    <div class="mt-2" style="text-align:center;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">
+      <button class="btn btn-ghost btn-sm" onclick="ocultarAsistencia()"><svg class="ic"><use href="#i-key"/></svg> Volver al ingreso del sistema</button>
+    </div>
   </div>
 </div>
 

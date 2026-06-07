@@ -76,6 +76,10 @@ function initData(){
   ]);
   if(!('caja_actual' in CACHE)) DB.set('caja_actual',null);
   if(!DB.get('factura_seq')) DB.set('factura_seq',0);
+  if(!DB.get('empleados')) DB.set('empleados',[
+    {id:'e1',nombre:'Carlos Gómez',cedula:'1098765432',codigo:'1234',activo:true},
+  ]);
+  if(!DB.get('marcaciones')) DB.set('marcaciones',[]);
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
     numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false
@@ -117,6 +121,46 @@ function doRecovery(){
   else toast('Código incorrecto.','error');
 }
 
+// ========================= CONTROL DE ASISTENCIA =========================
+function mostrarAsistencia(){
+  document.querySelector('#login-screen .login-card').style.display='none';
+  document.getElementById('asistencia-card').style.display='block';
+  document.getElementById('asis-cedula').value='';
+  document.getElementById('asis-codigo').value='';
+  document.getElementById('asis-msg').style.display='none';
+}
+function ocultarAsistencia(){
+  document.getElementById('asistencia-card').style.display='none';
+  document.querySelector('#login-screen .login-card').style.display='block';
+}
+function asisMsg(txt,ok){
+  const el=document.getElementById('asis-msg');
+  el.textContent=txt; el.style.color=ok?'#2ECC71':'var(--red-light)'; el.style.display='block';
+}
+function marcar(tipo){
+  const ced=document.getElementById('asis-cedula').value.trim();
+  const cod=document.getElementById('asis-codigo').value.trim();
+  if(!ced||!cod){ asisMsg('Ingrese cédula y código.',false); return; }
+  const emp=(DB.get('empleados')||[]).find(e=>e.cedula===ced && e.codigo===cod && e.activo);
+  if(!emp){ asisMsg('Cédula o código incorrectos.',false); return; }
+  const marcs=DB.get('marcaciones')||[];
+
+  // Evitar doble marcación del mismo tipo seguida
+  const hoyStr=today();
+  const ultimaHoy=marcs.filter(m=>m.empId===emp.id && m.fecha.startsWith(hoyStr)).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))[0];
+  if(ultimaHoy && ultimaHoy.tipo===tipo){
+    asisMsg(`Ya registró ${tipo} hace un momento.`,false); return;
+  }
+
+  marcs.unshift({id:uid(),empId:emp.id,nombre:emp.nombre,cedula:emp.cedula,tipo,fecha:now()});
+  DB.set('marcaciones',marcs);
+  const hora=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
+  asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
+  document.getElementById('asis-cedula').value='';
+  document.getElementById('asis-codigo').value='';
+  setTimeout(()=>{ if(document.getElementById('asis-msg')) document.getElementById('asis-msg').style.display='none'; }, 5000);
+}
+
 // ========================= SIDEBAR =========================
 const NAV = [
   {sec:'Principal'},
@@ -133,8 +177,9 @@ const NAV = [
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','cajero','supervisor']},
   {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
+  {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor']},
   {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor']},
-  {id:'config',icon:'i-settings',label:'Configuración',roles:['admin','supervisor']},
+  {id:'config',icon:'i-settings',label:'Configuración',roles:['admin']},
 ];
 function buildSidebar(){
   const rol=STATE.user.rol;
@@ -167,7 +212,8 @@ const PAGE_META={
   dashboard:['i-dashboard','Dashboard'], ventas:['i-cart','Nueva Venta'], pedidos:['i-orders','Pedidos'],
   listos:['i-ready','Pedidos Listos'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
-  reportes:['i-report','Reportes'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración']
+  reportes:['i-report','Reportes'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
+  asistencia:['i-clock','Control de Asistencia']
 };
 function showPage(name){
   STATE.page=name;
@@ -176,7 +222,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config};
+  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config,asistencia};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -435,14 +481,47 @@ function cobrarVenta(){
 function printFactura(v){
   const cfg=DB.get('config')||{}; const pa=document.getElementById('print-area');
   const esDom = v.tipo==='domicilio';
-  pa.innerHTML=`<div style="text-align:center;"><strong style="font-size:15px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</strong><br>NIT: ${cfg.nit||''}<br>${escapeHtml(cfg.dir||'')} - Tel: ${cfg.tel||''}<hr style="border:1px dashed #000;margin:6px 0;">${esDom?'<strong>DOMICILIO</strong>':'<strong>FACTURA '+v.factura+'</strong>'}<br>${fmtDate(v.fecha)}<br>${tipoLabel(v.tipo)}${v.mesa?' - '+v.mesa:''}${v.cliNombre?'<br>Cliente: '+escapeHtml(v.cliNombre):''}${esDom&&v.domiciliario?'<br>Mensajero: '+escapeHtml(v.domiciliario):''}<br>Cajero: ${escapeHtml(v.cajero||'')}<hr style="border:1px dashed #000;margin:6px 0;"></div>
-  ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;"><span>${i.qty}x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
-  <hr style="border:1px dashed #000;margin:6px 0;">
-  ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
-  ${v.descuento>0?`<div style="display:flex;justify-content:space-between;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
-  ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina voluntaria</span><span>${fmtMoney(v.propina)}</span></div>`:''}
-  <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:15px;"><span>TOTAL</span><span>${fmtMoney(v.total)}</span></div>
-  <div style="text-align:center;margin-top:8px;font-size:11px;">Método: ${v.metodo}<br>¡Gracias por su visita!</div>`;
+  const subtotalItems = v.items.reduce((a,i)=>a+i.precio*i.qty,0);
+  pa.innerHTML=`
+  <div style="font-family:'Courier New',monospace;color:#000;">
+    <div style="text-align:center;padding-bottom:8px;">
+      <div style="font-size:20px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
+      <div style="font-size:11px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
+      <div style="font-size:10px;margin-top:6px;line-height:1.5;">
+        NIT: ${cfg.nit||''}<br>${escapeHtml(cfg.dir||'')}<br>Tel: ${cfg.tel||''}
+      </div>
+    </div>
+    <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;text-align:center;margin:4px 0;">
+      <div style="font-size:14px;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA '+v.factura}</div>
+    </div>
+    <div style="font-size:10px;line-height:1.6;margin:6px 0;">
+      <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${fmtDate(v.fechaCobro||v.fecha)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Tipo:</span><span>${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}</span></div>
+      ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
+      ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección:</span><span>${escapeHtml(v.cliDir)}</span></div>`:''}
+      ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero:</span><span>${escapeHtml(v.domiciliario)}</span></div>`:''}
+      <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.cajero||'')}</span></div>
+    </div>
+    <div style="border-top:1px dashed #000;padding-top:4px;">
+      <div style="display:flex;justify-content:space-between;font-size:10px;font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:4px;">
+        <span style="flex:1;">CANT / PRODUCTO</span><span>VALOR</span>
+      </div>
+      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span style="flex:1;">${i.qty} x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
+    </div>
+    <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:11px;">
+      <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
+      ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
+      ${v.descuento>0?`<div style="display:flex;justify-content:space-between;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
+      ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina voluntaria</span><span>${fmtMoney(v.propina)}</span></div>`:''}
+    </div>
+    <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:8px 0;display:flex;justify-content:space-between;font-size:16px;font-weight:bold;">
+      <span>TOTAL</span><span>${fmtMoney(v.total)}</span>
+    </div>
+    <div style="text-align:center;font-size:10px;margin-top:4px;">Forma de pago: ${(v.metodo||'').toUpperCase()}</div>
+    <div style="text-align:center;margin-top:14px;font-size:11px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
+    <div style="text-align:center;font-size:9px;color:#555;margin-top:4px;">Lo esperamos pronto</div>
+    <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
+  </div>`;
   pa.style.display='block'; window.print(); pa.style.display='none';
 }
 function printTicketCocina(v){
@@ -829,6 +908,7 @@ function toggleProducto(id){ const ps=DB.get('productos')||[]; const p=ps.find(x
 
 // ========================= CONFIGURACIÓN =========================
 function config(){
+  if(STATE.user.rol!=='admin') return `<div class="empty-state">${ic('i-lock')}<p>Acceso restringido. Solo el administrador puede ver la configuración.</p></div>`;
   const c=DB.get('config')||{}; const ds=DB.get('domiciliarios')||[];
   return `<div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-settings')} Datos del Negocio</div>
@@ -867,6 +947,98 @@ function savePermisos(){
 function addDomiciliario(){ const n=document.getElementById('new-dom').value.trim(); if(!n)return; const ds=DB.get('domiciliarios')||[]; ds.push({id:uid(),nombre:n,activo:true}); DB.set('domiciliarios',ds); showPage('config'); }
 function delDomiciliario(id){ DB.set('domiciliarios',(DB.get('domiciliarios')||[]).filter(d=>d.id!==id)); showPage('config'); }
 
+// ========================= CONTROL DE ASISTENCIA (gestión + reportes) =========================
+let asisPeriodo='dia';
+function setAsisPeriodo(p){ asisPeriodo=p; showPage('asistencia'); }
+function asistencia(){
+  const emps=DB.get('empleados')||[];
+  const marcs=DB.get('marcaciones')||[];
+  // Calcular rango según periodo
+  const ahora=new Date(); let desde;
+  if(asisPeriodo==='dia'){ desde=new Date(ahora); desde.setHours(0,0,0,0); }
+  else if(asisPeriodo==='semana'){ desde=new Date(ahora.getTime()-7*864e5); }
+  else { desde=new Date(ahora); desde.setDate(1); desde.setHours(0,0,0,0); }
+  const enRango=marcs.filter(m=>new Date(m.fecha)>=desde).sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+
+  // Agrupar por empleado y por día para emparejar entrada/salida
+  const jornadas=calcularJornadas(enRango);
+  const totalHorasEmp={};
+  jornadas.forEach(j=>{ if(j.horas) totalHorasEmp[j.empId]=(totalHorasEmp[j.empId]||0)+j.horas; });
+
+  return `
+  <div class="card">
+    <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-users')} Empleados (Asistencia)</div>
+      <button class="btn btn-primary btn-sm" onclick="openModalEmpleado()">${ic('i-plus')} Nuevo Empleado</button></div>
+    ${emps.length===0?`<div class="empty-state">${ic('i-empty')}<p>Sin empleados registrados</p></div>`:
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Nombre</th><th>Cédula</th><th>Código</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+    ${emps.map(e=>`<tr><td class="font-bold">${escapeHtml(e.nombre)}</td><td>${escapeHtml(e.cedula)}</td><td><span class="text-gold">${escapeHtml(e.codigo)}</span></td><td><span class="badge ${e.activo?'badge-green':'badge-gray'}">${e.activo?'Activo':'Inactivo'}</span></td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalEmpleado('${e.id}')">${ic('i-edit')}</button><button class="btn btn-${e.activo?'danger':'success'} btn-sm" onclick="toggleEmpleado('${e.id}')">${e.activo?ic('i-ban'):ic('i-check')}</button></td></tr>`).join('')}
+    </tbody></table></div>`}
+  </div>
+  <div class="card">
+    <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-clock')} Reporte de Asistencia</div>
+      <div class="category-tabs" style="margin:0;">
+        <button class="cat-tab ${asisPeriodo==='dia'?'active':''}" onclick="setAsisPeriodo('dia')">Hoy</button>
+        <button class="cat-tab ${asisPeriodo==='semana'?'active':''}" onclick="setAsisPeriodo('semana')">Semana</button>
+        <button class="cat-tab ${asisPeriodo==='mes'?'active':''}" onclick="setAsisPeriodo('mes')">Mes</button>
+      </div></div>
+    ${jornadas.length===0?`<div class="empty-state">${ic('i-empty')}<p>Sin marcaciones en este periodo</p></div>`:
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Empleado</th><th>Día</th><th>Entrada</th><th>Salida</th><th>Horas</th></tr></thead><tbody>
+    ${jornadas.map(j=>`<tr><td class="font-bold">${escapeHtml(j.nombre)}</td><td>${j.dia}</td><td class="text-green">${j.entrada||'—'}</td><td class="text-red">${j.salida||'—'}</td><td class="font-bold text-gold">${j.horas?j.horas.toFixed(2)+' h':'—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <hr class="divider">
+    <div class="card-title">${ic('i-report')} Total de Horas por Empleado (${asisPeriodo==='dia'?'hoy':asisPeriodo==='semana'?'esta semana':'este mes'})</div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Empleado</th><th>Total Horas</th></tr></thead><tbody>
+    ${Object.entries(totalHorasEmp).map(([id,h])=>{ const e=emps.find(x=>x.id===id); return `<tr><td class="font-bold">${escapeHtml(e?e.nombre:'?')}</td><td class="text-gold font-bold">${h.toFixed(2)} h</td></tr>`; }).join('')||'<tr><td colspan="2" class="text-gray">Sin horas completas aún</td></tr>'}
+    </tbody></table></div>`}
+  </div>`;
+}
+function calcularJornadas(marcs){
+  // Empareja entrada→salida por empleado y por día
+  const porEmpDia={};
+  marcs.forEach(m=>{
+    const dia=m.fecha.split('T')[0];
+    const key=m.empId+'|'+dia;
+    if(!porEmpDia[key]) porEmpDia[key]={empId:m.empId,nombre:m.nombre,dia:fmtDiaCorto(dia),diaRaw:dia,marcas:[]};
+    porEmpDia[key].marcas.push(m);
+  });
+  const jornadas=[];
+  Object.values(porEmpDia).forEach(g=>{
+    let entrada=null;
+    g.marcas.forEach(m=>{
+      if(m.tipo==='entrada'){ entrada=m; }
+      else if(m.tipo==='salida' && entrada){
+        const h=(new Date(m.fecha)-new Date(entrada.fecha))/3600000;
+        jornadas.push({empId:g.empId,nombre:g.nombre,dia:g.dia,
+          entrada:fmtHora(entrada.fecha),salida:fmtHora(m.fecha),horas:h>0?h:0});
+        entrada=null;
+      }
+    });
+    if(entrada){ jornadas.push({empId:g.empId,nombre:g.nombre,dia:g.dia,entrada:fmtHora(entrada.fecha),salida:null,horas:0}); }
+  });
+  return jornadas.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+}
+function fmtHora(iso){ return new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}); }
+function fmtDiaCorto(d){ const x=new Date(d+'T12:00:00'); return x.toLocaleDateString('es-CO',{weekday:'short',day:'2-digit',month:'2-digit'}); }
+
+function openModalEmpleado(id){
+  ['e-nombre','e-cedula','e-codigo'].forEach(i=>document.getElementById(i).value='');
+  document.getElementById('edit-emp-id').value='';
+  if(id){ const e=(DB.get('empleados')||[]).find(x=>x.id===id); if(e){ document.getElementById('edit-emp-id').value=e.id;
+    document.getElementById('e-nombre').value=e.nombre; document.getElementById('e-cedula').value=e.cedula; document.getElementById('e-codigo').value=e.codigo; }}
+  document.getElementById('modal-emp-title').innerHTML=ic('i-users')+(id?' Editar Empleado':' Nuevo Empleado');
+  openModal('modal-empleado');
+}
+function saveEmpleado(){
+  const id=document.getElementById('edit-emp-id').value; const emps=DB.get('empleados')||[];
+  const data={nombre:document.getElementById('e-nombre').value.trim(),cedula:document.getElementById('e-cedula').value.trim(),codigo:document.getElementById('e-codigo').value.trim()};
+  if(!data.nombre||!data.cedula||!data.codigo){ toast('Complete nombre, cédula y código','error'); return; }
+  if(id){ const idx=emps.findIndex(x=>x.id===id); if(idx>=0) emps[idx]={...emps[idx],...data}; }
+  else emps.push({id:uid(),...data,activo:true});
+  DB.set('empleados',emps); logAudit(id?'Editó empleado':'Creó empleado',data.nombre);
+  closeModal('modal-empleado'); toast('Empleado guardado','success'); showPage('asistencia');
+}
+function toggleEmpleado(id){ const emps=DB.get('empleados')||[]; const e=emps.find(x=>x.id===id); if(e){e.activo=!e.activo;DB.set('empleados',emps);} showPage('asistencia'); }
+
 // ========================= MODALS HTML =========================
 function buildModals(){
   document.getElementById('modals').innerHTML=`
@@ -877,6 +1049,8 @@ function buildModals(){
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
 
   <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Propina voluntaria (COP)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
+
+  <div id="modal-empleado" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-emp-title">${ic('i-users')} Nuevo Empleado</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-empleado')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-emp-id"><div class="form-grid-2"><div class="form-group" style="grid-column:1/-1"><label>Nombre completo</label><input type="text" id="e-nombre"></div><div class="form-group"><label>Cédula</label><input type="text" id="e-cedula" inputmode="numeric"></div><div class="form-group"><label>Código (para marcar)</label><input type="text" id="e-codigo" inputmode="numeric" placeholder="Ej: 1234"></div></div><p class="text-xs text-gray mt-1">El empleado usará su cédula y este código en la pantalla de marcación de entrada/salida.</p></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-empleado')">Cancelar</button><button class="btn btn-gold" onclick="saveEmpleado()">Guardar</button></div></div></div>
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
@@ -898,7 +1072,7 @@ document.addEventListener('touchstart',()=>lastAct=Date.now());
 setInterval(()=>{ if(STATE.user && Date.now()-lastAct>30*60*1000){ toast('Sesión cerrada por inactividad'); doLogout(); }},60000);
 
 // ========================= BOOT con FIREBASE =========================
-const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config'];
+const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones'];
 
 function showConexion(estado){
   let el=document.getElementById('fb-status');
