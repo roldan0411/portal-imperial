@@ -285,9 +285,6 @@ select option { background: var(--dark2); }
     <div class="mt-2" style="text-align:center;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-recovery')">¿Olvidó su contraseña?</button>
     </div>
-    <div class="mt-2" style="text-align:center;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">
-      <button class="btn btn-ghost btn-sm" onclick="mostrarAsistencia()"><svg class="ic"><use href="#i-clock"/></svg> Marcar Entrada / Salida</button>
-    </div>
   </div>
 
   <!-- PANTALLA DE MARCACIÓN -->
@@ -311,7 +308,7 @@ select option { background: var(--dark2); }
     </div>
     <p class="mt-2 text-xs" id="asis-msg" style="display:none;text-align:center;"></p>
     <div class="mt-2" style="text-align:center;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">
-      <button class="btn btn-ghost btn-sm" onclick="ocultarAsistencia()"><svg class="ic"><use href="#i-key"/></svg> Volver al ingreso del sistema</button>
+      <button class="btn btn-ghost btn-sm" onclick="salirAsistencia()"><svg class="ic"><use href="#i-logout"/></svg> Salir</button>
     </div>
   </div>
 </div>

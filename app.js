@@ -25,6 +25,14 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&
 function esPagada(v){ return v.estado==='pagada'; }
 
 function nextFactura(){ const n=(DB.get('factura_seq')||0)+1; DB.set('factura_seq',n); return 'PI-'+String(n).padStart(6,'0'); }
+// Número de orden para cocina, se reinicia cada día (#001, #002...)
+function nextOrden(){
+  const hoyStr=today();
+  let seq=DB.get('orden_seq')||{fecha:'',n:0};
+  if(seq.fecha!==hoyStr) seq={fecha:hoyStr,n:0};
+  seq.n+=1; DB.set('orden_seq',seq);
+  return seq.n;
+}
 
 function toast(msg,type='info'){
   const el=document.createElement('div');
@@ -50,6 +58,7 @@ function initData(){
     {id:'u1',nombre:'Administrador',usuario:'admin',pass:'admin123',rol:'admin',activo:true,creado:now()},
     {id:'u2',nombre:'Carlos Cajero',usuario:'cajero1',pass:'caja123',rol:'cajero',activo:true,creado:now()},
     {id:'u3',nombre:'Cocina',usuario:'cocina',pass:'cocina123',rol:'cocina',activo:true,creado:now()},
+    {id:'u4',nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()},
   ]);
   if(!DB.get('productos')) DB.set('productos',[
     {id:'p1',nombre:'Rollos Primavera',precio:10000,cat:'Entremeses',activo:true},
@@ -80,6 +89,8 @@ function initData(){
     {id:'e1',nombre:'Carlos Gómez',cedula:'1098765432',codigo:'1234',activo:true},
   ]);
   if(!DB.get('marcaciones')) DB.set('marcaciones',[]);
+  // Asegurar que exista el usuario de biometría aunque ya haya usuarios guardados
+  (function(){ const us=DB.get('usuarios')||[]; if(!us.some(u=>u.rol==='biometria')){ us.push({id:uid(),nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()}); DB.set('usuarios',us); } })();
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
     numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false,
@@ -98,6 +109,15 @@ function doLogin(){
   const user=(DB.get('usuarios')||[]).find(x=>x.usuario===u && x.pass===p && x.activo);
   if(!user){ const e=document.getElementById('login-error'); e.textContent='Usuario o contraseña incorrectos.'; e.style.display='block'; return; }
   STATE.user=user;
+  document.getElementById('login-user').value='';
+  document.getElementById('login-pass').value='';
+  document.getElementById('login-error').style.display='none';
+  // Usuario biometría: va directo a la pantalla de marcación, no entra al sistema
+  if(user.rol==='biometria'){
+    logAudit('Abrió pantalla de biometría');
+    mostrarAsistencia();
+    return;
+  }
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('user-name-sb').textContent=user.nombre;
@@ -124,15 +144,22 @@ function doRecovery(){
 
 // ========================= CONTROL DE ASISTENCIA =========================
 function mostrarAsistencia(){
+  // Mostrar la pantalla de marcación sobre el login
+  document.getElementById('app').style.display='none';
+  document.getElementById('login-screen').style.display='flex';
   document.querySelector('#login-screen .login-card').style.display='none';
   document.getElementById('asistencia-card').style.display='block';
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
   document.getElementById('asis-msg').style.display='none';
 }
-function ocultarAsistencia(){
+function salirAsistencia(){
+  // Cierra sesión y vuelve al login normal
+  STATE.user=null;
   document.getElementById('asistencia-card').style.display='none';
   document.querySelector('#login-screen .login-card').style.display='block';
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('app').style.display='none';
 }
 function asisMsg(txt,ok){
   const el=document.getElementById('asis-msg');
@@ -184,7 +211,8 @@ function registrarMarcacion(emp,tipo){
   asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
-  setTimeout(()=>{ const el=document.getElementById('asis-msg'); if(el) el.style.display='none'; }, 5000);
+  // Por seguridad, cerrar sola la sesión después de cada marcación (3 segundos para ver el mensaje)
+  setTimeout(()=>{ salirAsistencia(); }, 3000);
 }
 
 // ========================= SIDEBAR =========================
@@ -295,8 +323,12 @@ function dashboard(){
 }
 function tipoLabel(t){ return {mesa:'Mesa',domicilio:'Domicilio',llevar:'Para llevar'}[t]||'—'; }
 function refPedido(v){
-  if(v.tipo==='domicilio') return v.domiciliario?escapeHtml(v.domiciliario):(v.cliNombre?escapeHtml(v.cliNombre):'Domicilio');
-  return v.factura||'—';
+  // Domicilio: nombre del cliente o mensajero, nunca número
+  if(v.tipo==='domicilio') return v.cliNombre?escapeHtml(v.cliNombre):(v.domiciliario?escapeHtml(v.domiciliario):'Domicilio');
+  // Mesa/llevar: si ya tiene factura la muestra, si no la orden de cocina
+  if(v.factura) return v.factura;
+  if(v.ordenCocina) return 'Orden #'+String(v.ordenCocina).padStart(3,'0');
+  return '—';
 }
 function estadoBadge(e){ return e==='anulada'?`<span class="badge badge-red">Anulada</span>`:e==='pagada'?`<span class="badge badge-green">Pagada</span>`:e==='abierta'?`<span class="badge badge-orange">Abierta</span>`:`<span class="badge badge-gold">${e||'activa'}</span>`; }
 
@@ -449,7 +481,7 @@ function guardarMesa(){
   }
 
   // Nueva mesa abierta (sin número de factura todavía, sin cobrar)
-  const venta={ id:uid(), factura:'', fecha:now(), tipo:'mesa', mesa:STATE.mesa,
+  const venta={ id:uid(), factura:'', ordenCocina:nextOrden(), fecha:now(), tipo:'mesa', mesa:STATE.mesa,
     cliNombre:'',cliTel:'',cliDir:'',cliBarrio:'', valorDom:0,
     items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total, metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
@@ -482,7 +514,7 @@ function cobrarVenta(){
 
   const esDomicilio = STATE.tipoPedido==='domicilio';
   const factura = esDomicilio ? '' : nextFactura();
-  const venta={ id:uid(),factura,fecha:now(),tipo:STATE.tipoPedido,
+  const venta={ id:uid(),factura,ordenCocina: esDomicilio?null:nextOrden(),fecha:now(),tipo:STATE.tipoPedido,
     mesa:STATE.tipoPedido==='mesa'?STATE.mesa:'', cliNombre:STATE.cliNombre,cliTel:STATE.cliTel,cliDir:STATE.cliDir,cliBarrio:STATE.cliBarrio,
     valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total, metodo, estado:'pagada', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
@@ -553,10 +585,37 @@ function printFactura(v){
 function printTicketCocina(v){
   const pa=document.getElementById('print-area');
   const esDom = v.tipo==='domicilio';
-  pa.innerHTML=`<div style="text-align:center;"><strong style="font-size:16px;">COCINA</strong><br>${esDom?'<strong>DOMICILIO</strong>':'<strong>'+v.factura+'</strong>'}<br>${tipoLabel(v.tipo)}${v.mesa?' - '+v.mesa:''}${esDom&&v.cliNombre?'<br>'+escapeHtml(v.cliNombre):''}<br>${fmtDate(v.fecha)}<hr style="border:1px dashed #000;margin:6px 0;"></div>
-  ${v.items.map(i=>`<div style="font-size:14px;margin-bottom:4px;"><strong>${i.qty}x ${escapeHtml(i.nombre)}</strong>${i.obs?`<br><span style="font-size:12px;">>> ${escapeHtml(i.obs)}</span>`:''}</div>`).join('')}
-  ${v.obs?`<hr style="border:1px dashed #000;margin:6px 0;"><div style="font-size:12px;">Nota: ${escapeHtml(v.obs)}</div>`:''}`;
-  // No imprime automáticamente, queda disponible vía botón. (Evita doble diálogo)
+  const orden = v.ordenCocina?('#'+String(v.ordenCocina).padStart(3,'0')):'';
+  // Línea grande de destino: a dónde va el pedido
+  let destino='';
+  if(v.tipo==='mesa') destino=(v.mesa||'MESA').toUpperCase();
+  else if(esDom) destino='DOMICILIO';
+  else destino='PARA LLEVAR';
+  // Encabezado: mesa/llevar usan ORDEN #; domicilio usa el nombre del cliente
+  const encabezado = esDom
+    ? `<div style="font-size:28px;font-weight:bold;line-height:1.1;margin:6px 0;">${escapeHtml((v.cliNombre||'CLIENTE').toUpperCase())}</div>`
+    : `<div style="font-size:34px;font-weight:bold;line-height:1.1;margin:6px 0;">ORDEN ${orden}</div>`;
+  pa.innerHTML=`
+  <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
+    <div style="font-size:13px;letter-spacing:2px;">*** COCINA ***</div>
+    ${encabezado}
+    <div style="border:2px solid #000;border-radius:6px;padding:6px;margin:6px 0;font-size:22px;font-weight:bold;">${destino}</div>
+    ${esDom?`<div style="font-size:13px;line-height:1.5;margin-bottom:4px;">
+       ${v.cliDir?escapeHtml(v.cliDir):''}${v.cliBarrio?' · '+escapeHtml(v.cliBarrio):''}<br>
+       Tel: ${escapeHtml(v.cliTel||'')}${v.domiciliario?'<br>Mensajero: '+escapeHtml(v.domiciliario):''}
+     </div>`:''}
+    ${v.tipo==='llevar'&&v.cliNombre?`<div style="font-size:14px;margin-bottom:4px;"><strong>${escapeHtml(v.cliNombre)}</strong></div>`:''}
+    <div style="font-size:11px;">${fmtDate(v.fecha)}</div>
+  </div>
+  <hr style="border:1px dashed #000;margin:6px 0;">
+  <div style="font-family:'Courier New',monospace;color:#000;">
+    ${v.items.map(i=>`<div style="font-size:16px;font-weight:bold;margin-bottom:6px;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:12px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+    ${v.obs?`<hr style="border:1px dashed #000;margin:6px 0;"><div style="font-size:13px;">NOTA: ${escapeHtml(v.obs)}</div>`:''}
+  </div>
+  <div style="text-align:center;font-size:18px;margin-top:8px;">--- ✁ ---</div>`;
+  pa.style.display='block';
+  window.print();
+  pa.style.display='none';
 }
 
 // ========================= NOTIFICACIÓN COCINA (SONIDO) =========================
@@ -720,7 +779,7 @@ function caja(){
       <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:10px;">Caja Cerrada</h2>
       <p class="text-gray mb-2">Abra la caja para comenzar a operar.</p>
       <button class="btn btn-gold" onclick="openModal('modal-caja')" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button></div>
-      ${cierres.length>0?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Efectivo</th><th>Nequi</th><th>Daviplata</th><th>Tarjeta</th><th>Gastos</th><th>Total Ventas</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,10).map(c=>`<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td>${fmtMoney(c.efectivo)}</td><td>${fmtMoney(c.nequi)}</td><td>${fmtMoney(c.daviplata)}</td><td>${fmtMoney(c.tarjeta)}</td><td class="text-red">${fmtMoney(c.gastos||0)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`).join('')}</tbody></table></div></div>`:''}`;
+      ${cierres.length>0?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,15).map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
@@ -779,18 +838,85 @@ function toggleEmpleadoField(){
   document.getElementById('mov-empleado-wrap').style.display = t==='nomina'?'block':'none';
 }
 function cerrarCaja(){
-  if(!confirm('¿Cerrar la caja? Se generará el reporte de cierre del empleado.')) return;
-  const c=DB.get('caja_actual');
+  const c=DB.get('caja_actual'); if(!c) return;
+  const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
+  const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
+  const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
+  const gastos=(c.movimientos||[]).filter(m=>m.tipo!=='entrada').reduce((a,m)=>a+m.monto,0);
+  const esperadoEfectivo=c.fondo+ef+entradas-gastos;
+  // Guardar el esperado para el cálculo del cuadre
+  window._cierreEsperado=esperadoEfectivo;
+  document.getElementById('cierre-esperado').textContent=fmtMoney(esperadoEfectivo);
+  document.getElementById('cierre-contado').value='';
+  document.getElementById('cierre-dif').innerHTML='<span class="text-gray">Cuente el efectivo del cajón</span>';
+  document.getElementById('cierre-obs').value='';
+  openModal('modal-cierre');
+}
+function calcularDiferencia(){
+  const contado=parseFloat(document.getElementById('cierre-contado').value)||0;
+  const esperado=window._cierreEsperado||0;
+  const dif=contado-esperado;
+  const el=document.getElementById('cierre-dif');
+  if(!document.getElementById('cierre-contado').value){ el.innerHTML='<span class="text-gray">Cuente el efectivo del cajón</span>'; return; }
+  if(dif===0) el.innerHTML=`<span class="text-green font-bold">✓ Caja cuadrada perfectamente</span>`;
+  else if(dif>0) el.innerHTML=`<span style="color:var(--blue-l);font-weight:700;">Sobra ${fmtMoney(dif)}</span>`;
+  else el.innerHTML=`<span class="text-red font-bold">Falta ${fmtMoney(Math.abs(dif))}</span>`;
+}
+function confirmarCierre(){
+  const c=DB.get('caja_actual'); if(!c){ closeModal('modal-cierre'); return; }
+  const contado=parseFloat(document.getElementById('cierre-contado').value);
+  if(isNaN(contado)){ toast('Ingrese el efectivo contado','error'); return; }
+  const obs=document.getElementById('cierre-obs').value;
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
   const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
   const nq=vs.filter(v=>v.metodo==='nequi').reduce((a,v)=>a+v.total,0);
   const dp=vs.filter(v=>v.metodo==='daviplata').reduce((a,v)=>a+v.total,0);
   const tc=vs.filter(v=>v.metodo==='tarjeta').reduce((a,v)=>a+v.total,0);
+  const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=(c.movimientos||[]).filter(m=>m.tipo!=='entrada').reduce((a,m)=>a+m.monto,0);
-  const cierre={...c,cierre:now(),efectivo:ef,nequi:nq,daviplata:dp,tarjeta:tc,gastos,total:ef+nq+dp+tc};
+  const esperadoEfectivo=c.fondo+ef+entradas-gastos;
+  const diferencia=contado-esperadoEfectivo;
+  const cierre={...c,cierre:now(),efectivo:ef,nequi:nq,daviplata:dp,tarjeta:tc,gastos,entradas,
+    total:ef+nq+dp+tc, esperadoEfectivo, contadoEfectivo:contado, diferencia, obsCierre:obs};
   const cs=DB.get('cierres')||[]; cs.unshift(cierre); DB.set('cierres',cs); DB.set('caja_actual',null);
-  logAudit('Cerró caja',`${c.cajero} - Total: ${fmtMoney(cierre.total)}`);
-  toast('Caja cerrada','success'); showPage('caja');
+  logAudit('Cerró caja',`${c.cajero} - Ventas: ${fmtMoney(cierre.total)} - ${diferencia===0?'Cuadrada':diferencia>0?'Sobra '+fmtMoney(diferencia):'Falta '+fmtMoney(Math.abs(diferencia))}`);
+  closeModal('modal-cierre');
+  toast(diferencia===0?'Caja cerrada y cuadrada':diferencia>0?`Caja cerrada. Sobran ${fmtMoney(diferencia)}`:`Caja cerrada. Faltan ${fmtMoney(Math.abs(diferencia))}`, diferencia===0?'success':'error');
+  imprimirCierre(cierre);
+  showPage('caja');
+}
+function imprimirCierre(c){
+  const cfg=DB.get('config')||{}; const pa=document.getElementById('print-area');
+  const dif=c.diferencia||0;
+  pa.innerHTML=`<div style="font-family:'Courier New',monospace;color:#000;">
+    <div style="text-align:center;font-size:15px;font-weight:bold;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
+    <div style="text-align:center;font-size:13px;font-weight:bold;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0;margin:6px 0;">CIERRE DE CAJA</div>
+    <div style="font-size:11px;line-height:1.7;">
+      <div style="display:flex;justify-content:space-between;"><span>Cajero:</span><span>${escapeHtml(c.cajero)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Apertura:</span><span>${fmtDate(c.apertura)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Cierre:</span><span>${fmtDate(c.cierre)}</span></div>
+    </div>
+    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:11px;line-height:1.7;">
+      <div style="display:flex;justify-content:space-between;"><span>Fondo inicial</span><span>${fmtMoney(c.fondo)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Ventas efectivo</span><span>${fmtMoney(c.efectivo)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Ventas Nequi</span><span>${fmtMoney(c.nequi)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Ventas Daviplata</span><span>${fmtMoney(c.daviplata)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Ventas tarjeta</span><span>${fmtMoney(c.tarjeta)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Entradas</span><span>${fmtMoney(c.entradas)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Gastos/salidas</span><span>-${fmtMoney(c.gastos)}</span></div>
+    </div>
+    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:12px;line-height:1.8;">
+      <div style="display:flex;justify-content:space-between;font-weight:bold;"><span>Total ventas</span><span>${fmtMoney(c.total)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Efectivo esperado</span><span>${fmtMoney(c.esperadoEfectivo)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Efectivo contado</span><span>${fmtMoney(c.contadoEfectivo)}</span></div>
+    </div>
+    <div style="border:2px solid #000;border-radius:4px;margin-top:6px;padding:6px;text-align:center;font-size:14px;font-weight:bold;">
+      ${dif===0?'CAJA CUADRADA':dif>0?'SOBRA '+fmtMoney(dif):'FALTA '+fmtMoney(Math.abs(dif))}
+    </div>
+    ${c.obsCierre?`<div style="font-size:10px;margin-top:6px;">Obs: ${escapeHtml(c.obsCierre)}</div>`:''}
+    <div style="text-align:center;font-size:10px;margin-top:8px;">Firma: _______________</div>
+  </div>`;
+  pa.style.display='block'; window.print(); pa.style.display='none';
 }
 
 // ========================= DOMICILIOS / CLIENTES =========================
@@ -1026,6 +1152,11 @@ function asistencia(){
   jornadas.forEach(j=>{ if(j.horas) totalHorasEmp[j.empId]=(totalHorasEmp[j.empId]||0)+j.horas; });
 
   return `
+  <div class="card" style="text-align:center;background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
+    <div class="card-title" style="justify-content:center;">${ic('i-clock')} Pantalla de Marcación</div>
+    <p class="text-sm text-gray mb-2">Abre la pantalla donde los empleados marcan entrada y salida con su cédula y código.</p>
+    <button class="btn btn-gold" onclick="mostrarAsistencia()" style="padding:12px 28px;">${ic('i-clock')} Abrir Pantalla de Marcación</button>
+  </div>
   <div class="card">
     <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-users')} Empleados (Asistencia)</div>
       <button class="btn btn-primary btn-sm" onclick="openModalEmpleado()">${ic('i-plus')} Nuevo Empleado</button></div>
@@ -1164,6 +1295,8 @@ function buildModals(){
 
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
 
+  <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
+
   <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Propina voluntaria (COP)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
 
   <div id="modal-empleado" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-emp-title">${ic('i-users')} Nuevo Empleado</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-empleado')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-emp-id"><div class="form-grid-2"><div class="form-group" style="grid-column:1/-1"><label>Nombre completo</label><input type="text" id="e-nombre"></div><div class="form-group"><label>Cédula</label><input type="text" id="e-cedula" inputmode="numeric"></div><div class="form-group"><label>Código (para marcar)</label><input type="text" id="e-codigo" inputmode="numeric" placeholder="Ej: 1234"></div></div><p class="text-xs text-gray mt-1">El empleado usará su cédula y este código en la pantalla de marcación de entrada/salida.</p></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-empleado')">Cancelar</button><button class="btn btn-gold" onclick="saveEmpleado()">Guardar</button></div></div></div>
@@ -1190,7 +1323,7 @@ document.addEventListener('touchstart',()=>lastAct=Date.now());
 setInterval(()=>{ if(STATE.user && Date.now()-lastAct>30*60*1000){ toast('Sesión cerrada por inactividad'); doLogout(); }},60000);
 
 // ========================= BOOT con FIREBASE =========================
-const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones'];
+const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones','orden_seq'];
 
 function showConexion(estado){
   let el=document.getElementById('fb-status');
