@@ -456,15 +456,15 @@ function renderOrderPanel(){
     ${desc>0?`<div class="flex-between text-sm text-red"><span>Descuento ${STATE.descMot?'('+escapeHtml(STATE.descMot)+')':''}</span><span>-${fmtMoney(desc)}</span></div>`:''}
     ${esCobroDirecto&&propinaV>0?`<div class="flex-between text-sm"><span class="text-gray">Propina</span><span>${fmtMoney(propinaV)}</span></div>`:''}
     ${esCobroDirecto&&recargoV>0?`<div class="flex-between text-sm"><span class="text-gray">Recargo datáfono</span><span>${fmtMoney(recargoV)}</span></div>`:''}
-    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>${esCobroDirecto?'Total a cobrar':'Total'}</span><span class="text-gold">${fmtMoney(esCobroDirecto?totalCobrar:total)}</span></div>
+    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>${esCobroDirecto?'Total a cobrar':'Total'}</span><span class="text-gold" id="venta-total-disp">${fmtMoney(esCobroDirecto?totalCobrar:total)}</span></div>
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
       ${esCobroDirecto?`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;" onchange="STATE.metodoVenta=this.value;renderOrderPanel()">${opcionesMetodo(metodoSel)}</select>`:''}
     </div>
     ${esCobroDirecto?`
       <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
-        <input type="number" class="mini-input" style="flex:1;min-width:100px;" placeholder="Propina (mesero)" value="${propinaV||''}" oninput="STATE.propina=parseFloat(this.value)||0;renderOrderPanel()">
-        ${metodoSel==='tarjeta'?`<input type="number" class="mini-input" style="flex:1;min-width:100px;" placeholder="Recargo datáfono" value="${recargoV||''}" oninput="STATE.recargo=parseFloat(this.value)||0;renderOrderPanel()">`:''}
+        <input type="number" inputmode="numeric" class="mini-input" style="flex:1;min-width:100px;" placeholder="Propina (mesero)" value="${propinaV||''}" oninput="STATE.propina=parseFloat(this.value)||0;actualizarTotalVenta()">
+        ${metodoSel==='tarjeta'?`<input type="number" inputmode="numeric" class="mini-input" style="flex:1;min-width:100px;" placeholder="Recargo datáfono" value="${recargoV||''}" oninput="STATE.recargo=parseFloat(this.value)||0;actualizarTotalVenta()">`:''}
       </div>`:''}
     ${STATE.tipoPedido==='mesa'
       ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
@@ -472,7 +472,19 @@ function renderOrderPanel(){
       : (STATE.user.rol==='mesero'
         ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarPedidoAbierto()" style="font-size:14px;padding:12px;">${ic('i-check')} Enviar a Cocina (sin cobrar)</button>
            <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">El pedido queda abierto. El cajero lo cobra.</p>`
-        : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(totalCobrar)}</button>`)}`;
+        : `<button class="btn btn-gold btn-block mt-1" id="btn-cobrar-venta" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(totalCobrar)}</button>`)}`;
+}
+function actualizarTotalVenta(){
+  // Actualiza solo el total mostrado y el botón, SIN redibujar (para no perder el foco al escribir)
+  const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
+  const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
+  const total=Math.max(0,subtotal+dom-(STATE.descuento||0));
+  const metodoSel=STATE.metodoVenta||'efectivo';
+  const propinaV=STATE.propina||0;
+  const recargoV=(metodoSel==='tarjeta')?(STATE.recargo||0):0;
+  const totalCobrar=total+propinaV+recargoV;
+  const disp=document.getElementById('venta-total-disp'); if(disp) disp.textContent=fmtMoney(totalCobrar);
+  const btn=document.getElementById('btn-cobrar-venta'); if(btn && !STATE.editandoVenta) btn.innerHTML=`${ic('i-check')} Cobrar ${fmtMoney(totalCobrar)}`;
 }
 function applyDescuento(){
   const tipo=document.getElementById('desc-tipo').value, val=parseFloat(document.getElementById('desc-valor').value)||0;
@@ -627,12 +639,13 @@ function printFactura(v){
     </div>
     <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:11px;">
       <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
-      ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
       ${v.descuento>0?`<div style="display:flex;justify-content:space-between;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
-      ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina voluntaria</span><span>${fmtMoney(v.propina)}</span></div>`:''}
+      ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
+      ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina</span><span>${fmtMoney(v.propina)}</span></div>`:''}
+      ${v.recargo>0?`<div style="display:flex;justify-content:space-between;"><span>Recargo datáfono</span><span>${fmtMoney(v.recargo)}</span></div>`:''}
     </div>
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:8px 0;display:flex;justify-content:space-between;font-size:16px;font-weight:bold;">
-      <span>TOTAL</span><span>${fmtMoney(v.total)}</span>
+      <span>TOTAL</span><span>${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
     </div>
     <div style="text-align:center;font-size:10px;margin-top:4px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
     <div style="text-align:center;margin-top:14px;font-size:11px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
