@@ -324,6 +324,12 @@ function refPedido(v){
   if(v.ordenCocina) return 'Orden #'+String(v.ordenCocina).padStart(3,'0');
   return '—';
 }
+// Referencia para COCINA y PEDIDOS LISTOS: nunca usa factura, siempre orden o nombre
+function refCocina(v){
+  if(v.tipo==='domicilio') return v.cliNombre?escapeHtml(v.cliNombre):(v.domiciliario?escapeHtml(v.domiciliario):'Domicilio');
+  if(v.ordenCocina) return 'Orden #'+String(v.ordenCocina).padStart(3,'0');
+  return '—';
+}
 function estadoBadge(e){ return e==='anulada'?`<span class="badge badge-red">Anulada</span>`:e==='pagada'?`<span class="badge badge-green">Pagada</span>`:e==='abierta'?`<span class="badge badge-orange">Abierta</span>`:`<span class="badge badge-gold">${e||'activa'}</span>`; }
 
 // ========================= VENTAS (POS) =========================
@@ -828,7 +834,7 @@ function listos(){
   return `<div class="card"><div class="card-title">${ic('i-ready')} Pedidos Listos para Entregar</div>
   ${vs.length===0?`<div class="empty-state">${ic('i-empty')}<p>No hay pedidos listos</p></div>`:
   `<div class="kds-grid">${vs.map(v=>`<div class="kds-card t-verde">
-    <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refPedido(v)}</span><span class="badge badge-green">${ic('i-check')} Listo</span></div>
+    <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refCocina(v)}</span><span class="badge badge-green">${ic('i-check')} Listo</span></div>
     <div class="text-sm mb-2">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
     ${v.tipo==='domicilio'?`<div class="text-xs text-gray mb-2">${ic('i-pin')} ${escapeHtml(v.cliDir||'')} ${v.domiciliario?'· '+escapeHtml(v.domiciliario):''}</div>`:''}
     <button class="btn btn-success btn-block btn-sm" onclick="setEstadoCocina('${v.id}','entregado')">${ic('i-check')} Marcar Entregado</button>
@@ -849,7 +855,7 @@ function renderKDS(vs){
     const min=Math.floor((ahoraMs()-new Date(v.fecha))/60000);
     const t=min<15?'verde':min<25?'amarillo':'rojo';
     return `<div class="kds-card t-${t}">
-      <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refPedido(v)}</span>
+      <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refCocina(v)}</span>
       <span class="kds-timer ${t==='rojo'?'text-red':t==='amarillo'?'text-gold':'text-green'}">${min} min</span></div>
       <div class="text-sm" style="margin-bottom:8px;color:var(--light);">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
       ${v.tipo==='domicilio'?`<div class="text-xs text-gray" style="margin-bottom:8px;">${ic('i-pin')} ${escapeHtml(v.cliDir||'')}<br>${ic('i-phone')} ${escapeHtml(v.cliTel||'')}</div>`:''}
@@ -863,7 +869,7 @@ function renderKDS(vs){
 function setEstadoCocina(id,e){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id);
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado'; DB.set('ventas',vs);
-    if(e==='listo'){ sonidoListo(); toast(`${refPedido(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura); }
+    if(e==='listo'){ sonidoListo(); toast(`${refCocina(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
   showPage(STATE.page); updateBadges();
 }
 
