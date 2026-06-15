@@ -15,7 +15,9 @@ const DB = {
   },
 };
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
-function now(){ return new Date().toISOString(); }
+let SERVER_OFFSET = 0; // diferencia entre reloj del servidor y el del dispositivo (ms)
+function now(){ return new Date(Date.now() + SERVER_OFFSET).toISOString(); }
+function ahoraMs(){ return Date.now() + SERVER_OFFSET; }
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleDateString('es-CO')+' '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}); }
 function fmtMoney(n){ return '$ '+(Math.round(n)||0).toLocaleString('es-CO'); }
 function uid(){ return '_'+Math.random().toString(36).substr(2,9); }
@@ -41,6 +43,7 @@ function toast(msg,type='info'){
   el.innerHTML = ic(icon)+'<span>'+escapeHtml(msg)+'</span>';
   document.getElementById('toast-container').appendChild(el);
   setTimeout(()=>el.remove(),3500);
+  if(type==='success') sonidoExito(); else if(type==='error') sonidoError();
 }
 function openModal(id){ const m=document.getElementById(id); if(m) m.style.display='flex'; }
 function closeModal(id){ const m=document.getElementById(id); if(m) m.style.display='none'; }
@@ -94,8 +97,10 @@ function initData(){
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
     numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false,
-    gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100
+    gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100, logo:(window.LOGO_DEFAULT||'')
   });
+  // Si ya existe config pero sin logo, poner el logo por defecto
+  (function(){ const c=DB.get('config')||{}; if(!c.logo && window.LOGO_DEFAULT){ c.logo=window.LOGO_DEFAULT; DB.set('config',c); } })();
 }
 
 // ========================= STATE =========================
@@ -207,7 +212,7 @@ function registrarMarcacion(emp,tipo){
   if(ultimaHoy && ultimaHoy.tipo===tipo){ asisMsg(`Ya registró ${tipo} hace un momento.`,false); return; }
   marcs.unshift({id:uid(),empId:emp.id,nombre:emp.nombre,cedula:emp.cedula,tipo,fecha:now()});
   DB.set('marcaciones',marcs);
-  const hora=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
+  const hora=new Date(ahoraMs()).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
   asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
@@ -334,6 +339,15 @@ function estadoBadge(e){ return e==='anulada'?`<span class="badge badge-red">Anu
 
 // ========================= VENTAS (POS) =========================
 function ventas(){
+  // Obligar a abrir caja antes de vender
+  if(!DB.get('caja_actual')){
+    return `<div class="card" style="max-width:520px;margin:40px auto;text-align:center;padding:40px;">
+      <div style="font-size:48px;color:var(--gold);margin-bottom:12px;">${ic('i-cash')}</div>
+      <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:12px;">Debe abrir la caja primero</h2>
+      <p class="text-gray mb-2">No puede registrar ventas sin antes abrir la caja con el fondo inicial. Esto es necesario para que al final del día el cuadre de caja sea correcto.</p>
+      <button class="btn btn-gold" onclick="showPage('caja')" style="padding:13px 30px;">${ic('i-lock')} Ir a Abrir Caja</button>
+    </div>`;
+  }
   const prods=(DB.get('productos')||[]).filter(p=>p.activo);
   const cats=['Todos',...new Set(prods.map(p=>p.cat))];
   const clientes=DB.get('clientes')||[];
@@ -458,6 +472,7 @@ function applyDescuento(){
 }
 
 function guardarMesa(){
+  if(!DB.get('caja_actual')){ toast('Debe abrir la caja antes de vender','error'); showPage('caja'); return; }
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
   if(!STATE.mesa){ toast('Seleccione una mesa','error'); return; }
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
@@ -495,6 +510,7 @@ function guardarMesa(){
 }
 
 function cobrarVenta(){
+  if(!DB.get('caja_actual')){ toast('Debe abrir la caja antes de vender','error'); showPage('caja'); return; }
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
   if(STATE.tipoPedido==='domicilio' && (!STATE.cliNombre||!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio requiere nombre, teléfono y dirección','error'); return; }
   if(STATE.tipoPedido==='llevar' && !STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
@@ -543,6 +559,7 @@ function printFactura(v){
   pa.innerHTML=`
   <div style="font-family:'Courier New',monospace;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
+      ${cfg.logo?`<img src="${cfg.logo}" style="max-height:70px;max-width:180px;margin-bottom:6px;">`:''}
       <div style="font-size:20px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
       <div style="font-size:11px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
       <div style="font-size:10px;margin-top:6px;line-height:1.5;">
@@ -622,9 +639,15 @@ function printTicketCocina(v){
 function beep(freq=800,dur=200){
   try{ const ctx=new (window.AudioContext||window.webkitAudioContext)(); const o=ctx.createOscillator(),g=ctx.createGain();
   o.connect(g); g.connect(ctx.destination); o.frequency.value=freq; o.type='sine'; g.gain.setValueAtTime(0.3,ctx.currentTime);
-  o.start(); g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur/1000); o.stop(ctx.currentTime+dur/1000);}catch(e){}
+  o.start(); g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur/1000); o.stop(ctx.currentTime+dur/1000);
+  }catch(e){}
 }
-function notifyKitchen(){ beep(800,150); setTimeout(()=>beep(600,200),180); }
+// Sonidos distintos por evento
+function sonidoPedidoNuevo(){ beep(700,120); setTimeout(()=>beep(900,180),140); } // dos tonos ascendentes
+function sonidoListo(){ beep(1000,150); setTimeout(()=>beep(1300,250),170); }      // campanita alegre
+function sonidoError(){ beep(250,300); }                                            // tono grave
+function sonidoExito(){ beep(900,100); setTimeout(()=>beep(1200,120),110); }        // confirmación
+function notifyKitchen(){ sonidoPedidoNuevo(); }
 
 // ========================= PEDIDOS =========================
 function pedidos(){
@@ -749,7 +772,7 @@ function cocina(){
 function renderKDS(vs){
   if(vs.length===0) return `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos en cocina</p></div>`;
   return `<div class="kds-grid">${vs.map(v=>{
-    const min=Math.floor((Date.now()-new Date(v.fecha))/60000);
+    const min=Math.floor((ahoraMs()-new Date(v.fecha))/60000);
     const t=min<15?'verde':min<25?'amarillo':'rojo';
     return `<div class="kds-card t-${t}">
       <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refPedido(v)}</span>
@@ -766,7 +789,7 @@ function renderKDS(vs){
 function setEstadoCocina(id,e){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id);
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado'; DB.set('ventas',vs);
-    if(e==='listo'){ beep(900,300); toast(`${v.factura} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura); }
+    if(e==='listo'){ sonidoListo(); toast(`${refPedido(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura); }
   showPage(STATE.page); updateBadges();
 }
 
@@ -1001,23 +1024,70 @@ function renderHistTable(vs){
 function reportes(){
   const vs=DB.get('ventas')||[]; const t=today();
   const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v)); const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
-  const weekly=[]; for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5); const dk=d.toISOString().split('T')[0];
+  const weekly=[]; for(let i=6;i>=0;i--){ const d=new Date(ahoraMs()-i*864e5); const dk=d.toISOString().split('T')[0];
     const p=vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)); weekly.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
   const monthly=[]; for(let i=11;i>=0;i--){ const d=new Date(); d.setMonth(d.getMonth()-i); d.setDate(1); const mk=d.toISOString().substring(0,7);
     const p=vs.filter(v=>v.fecha?.startsWith(mk)&&esPagada(v)); monthly.push({lbl:d.toLocaleDateString('es-CO',{month:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
   const mw=Math.max(...weekly.map(d=>d.total),1), mm=Math.max(...monthly.map(d=>d.total),1);
-  const items={}; hoy.forEach(v=>v.items?.forEach(i=>{ if(!items[i.nombre])items[i.nombre]={qty:0,total:0}; items[i.nombre].qty+=i.qty; items[i.nombre].total+=i.precio*i.qty; }));
-  const top=Object.entries(items).sort((a,b)=>b[1].qty-a[1].qty).slice(0,10);
-  return `<div class="grid-2">
+
+  // Productos vendidos (últimos 30 días) para más y menos vendidos
+  const ini30=new Date(ahoraMs()-30*864e5).toISOString().split('T')[0];
+  const ventas30=vs.filter(v=>v.fecha>=ini30&&esPagada(v));
+  const items={}; ventas30.forEach(v=>v.items?.forEach(i=>{ if(!items[i.nombre])items[i.nombre]={qty:0,total:0}; items[i.nombre].qty+=i.qty; items[i.nombre].total+=i.precio*i.qty; }));
+  const ordenados=Object.entries(items).sort((a,b)=>b[1].qty-a[1].qty);
+  const top=ordenados.slice(0,8);
+  const menos=ordenados.slice(-8).reverse();
+
+  // Horas pico (últimos 30 días): ventas por hora del día
+  const horas=new Array(24).fill(0);
+  ventas30.forEach(v=>{ const h=new Date(v.fecha).getHours(); horas[h]+=v.total; });
+  const maxHora=Math.max(...horas,1);
+  const horasActivas=horas.map((tot,h)=>({h,tot})).filter(x=>x.tot>0);
+
+  // Comparativo: este día de semana vs el mismo día la semana pasada
+  const hoyTotal=totalHoy;
+  const haceSemana=new Date(ahoraMs()-7*864e5).toISOString().split('T')[0];
+  const totalHaceSemana=vs.filter(v=>v.fecha?.startsWith(haceSemana)&&esPagada(v)).reduce((a,v)=>a+v.total,0);
+  const difSemana=totalHaceSemana>0?((hoyTotal-totalHaceSemana)/totalHaceSemana*100):0;
+
+  // ----- ALERTAS -----
+  const alertas=[];
+  const cierres=DB.get('cierres')||[];
+  cierres.slice(0,5).forEach(c=>{ if(c.diferencia<0) alertas.push({tipo:'falta',txt:`Caja de ${c.cajero} cerró con faltante de ${fmtMoney(Math.abs(c.diferencia))} (${fmtDate(c.cierre)})`}); });
+  const anulHoy=vs.filter(v=>v.estado==='anulada'&&v.fecha?.startsWith(t)).length;
+  if(anulHoy>=3) alertas.push({tipo:'anul',txt:`Hoy se han anulado ${anulHoy} ventas. Revise el detalle en Historial.`});
+
+  return `
+  ${alertas.length>0?`<div class="card" style="border-color:rgba(192,57,43,0.4);background:linear-gradient(145deg,rgba(192,57,43,0.1),var(--dark));">
+    <div class="card-title text-red">${ic('i-warning')} Alertas</div>
+    ${alertas.map(a=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;">${ic('i-warning')} ${escapeHtml(a.txt)}</div>`).join('')}
+  </div>`:''}
+
+  <div class="stats-grid">
+    <div class="stat-card green"><div class="stat-label">Ventas Hoy</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} transacciones</div></div>
+    <div class="stat-card gold"><div class="stat-label">Ticket Promedio</div><div class="stat-value">${fmtMoney(hoy.length?Math.round(totalHoy/hoy.length):0)}</div></div>
+    <div class="stat-card ${difSemana>=0?'green':'red'}"><div class="stat-label">vs. mismo día semana pasada</div><div class="stat-value">${difSemana>=0?'+':''}${difSemana.toFixed(0)}%</div><div class="stat-sub">Hace 7 días: ${fmtMoney(totalHaceSemana)}</div></div>
+  </div>
+
+  <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-report')} Ventas por Día (7 días)</div><div class="bar-chart" style="height:140px;">${weekly.map(d=>`<div class="bar-item"><div class="bar-val">${d.total>0?(d.total/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.total/mw)*110)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('')}</div></div>
     <div class="card"><div class="card-title">${ic('i-report')} Ventas Mensuales (12 meses)</div><div class="bar-chart" style="height:140px;">${monthly.map(d=>`<div class="bar-item"><div class="bar-val">${d.total>0?(d.total/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.total/mm)*110)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('')}</div></div>
   </div>
-  <div class="card"><div class="card-title">${ic('i-cash')} Resumen del Día</div><div class="stats-grid">
-    <div class="stat-card green"><div class="stat-label">Total Ventas</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} transacciones</div></div>
-    <div class="stat-card red"><div class="stat-label">Ticket Promedio</div><div class="stat-value">${fmtMoney(hoy.length?Math.round(totalHoy/hoy.length):0)}</div></div>
-  </div></div>
-  <div class="card"><div class="card-title">${ic('i-menu-food')} Productos Más Vendidos (Hoy)</div>
-    ${top.length===0?`<p class="text-gray text-sm">Sin datos</p>`:`<div class="table-wrap"><table class="data-table"><thead><tr><th>Producto</th><th>Unidades</th><th>Total</th></tr></thead><tbody>${top.map(([n,d])=>`<tr><td>${escapeHtml(n)}</td><td><strong>${d.qty}</strong></td><td class="text-gold">${fmtMoney(d.total)}</td></tr>`).join('')}</tbody></table></div>`}
+
+  <div class="card"><div class="card-title">${ic('i-clock')} Horas Pico (últimos 30 días)</div>
+    ${horasActivas.length===0?`<p class="text-gray text-sm">Sin datos</p>`:
+    `<div class="bar-chart" style="height:120px;">${horasActivas.map(x=>`<div class="bar-item"><div class="bar-val">${(x.tot/1000).toFixed(0)+'k'}</div><div class="bar-fill" style="height:${Math.max(4,(x.tot/maxHora)*90)}px"></div><div class="bar-label">${x.h}h</div></div>`).join('')}</div>
+    <p class="text-xs text-gray mt-1">Te ayuda a saber a qué horas necesitas más personal.</p>`}
+  </div>
+
+  <div class="grid-2">
+    <div class="card"><div class="card-title">${ic('i-menu-food')} Más Vendidos (30 días)</div>
+      ${top.length===0?`<p class="text-gray text-sm">Sin datos</p>`:`<div class="table-wrap"><table class="data-table"><thead><tr><th>Producto</th><th>Uds.</th><th>Total</th></tr></thead><tbody>${top.map(([n,d])=>`<tr><td>${escapeHtml(n)}</td><td><strong>${d.qty}</strong></td><td class="text-gold">${fmtMoney(d.total)}</td></tr>`).join('')}</tbody></table></div>`}
+    </div>
+    <div class="card"><div class="card-title">${ic('i-report')} Menos Vendidos (30 días)</div>
+      ${menos.length===0?`<p class="text-gray text-sm">Sin datos</p>`:`<div class="table-wrap"><table class="data-table"><thead><tr><th>Producto</th><th>Uds.</th><th>Total</th></tr></thead><tbody>${menos.map(([n,d])=>`<tr><td>${escapeHtml(n)}</td><td><strong>${d.qty}</strong></td><td class="text-gray">${fmtMoney(d.total)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="text-xs text-gray mt-1">Candidatos a quitar o renovar en el menú.</p>`}
+    </div>
   </div>`;
 }
 
@@ -1068,6 +1138,10 @@ function config(){
       <div class="form-grid-2"><div class="form-group"><label>NIT</label><input type="text" id="cfg-nit" value="${escapeHtml(c.nit||'')}"></div><div class="form-group"><label>Teléfono</label><input type="text" id="cfg-tel" value="${escapeHtml(c.tel||'')}"></div></div>
       <div class="form-group"><label>Dirección</label><input type="text" id="cfg-dir" value="${escapeHtml(c.dir||'')}"></div>
       <div class="form-group"><label>Cantidad de Mesas</label><input type="number" id="cfg-mesas" value="${c.numMesas||25}" min="1" max="200"></div>
+      <div class="form-group"><label>Logo del restaurante (para la factura)</label>
+        <input type="file" id="cfg-logo-file" accept="image/png,image/jpeg" onchange="cargarLogo(event)">
+        <div id="cfg-logo-preview" style="margin-top:8px;">${c.logo?`<img src="${c.logo}" style="max-height:70px;border-radius:6px;background:#fff;padding:4px;"> <button class="btn btn-ghost btn-sm" onclick="quitarLogo()">${ic('i-trash')} Quitar</button>`:'<span class="text-xs text-gray">Sin logo. Suba un PNG o JPG.</span>'}</div>
+      </div>
       <button class="btn btn-gold" onclick="saveConfig()">${ic('i-check')} Guardar</button>
     </div>
     <div class="card"><div class="card-title">${ic('i-trash')} Permisos de Eliminación Definitiva</div>
@@ -1094,6 +1168,14 @@ function config(){
         <button class="btn btn-gold" onclick="saveGps()">${ic('i-check')} Guardar GPS</button>
       </div>
       <p class="text-xs text-gray mt-2">Consejo: párate dentro del restaurante con tu celular y presiona "Usar mi ubicación actual" para llenar las coordenadas automáticamente.</p>
+    </div>
+    <div class="card" style="grid-column:1/-1"><div class="card-title">${ic('i-history')} Respaldo de Datos</div>
+      <p class="text-sm text-gray mb-2">Descarga una copia de seguridad de toda la información (ventas, caja, empleados, asistencias, configuración). Guárdala en un lugar seguro cada cierto tiempo. Si algo se daña, puedes restaurarla.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-gold" onclick="exportarDatos()">${ic('i-history')} Descargar Respaldo</button>
+        <label class="btn btn-ghost" style="cursor:pointer;">${ic('i-history')} Restaurar Respaldo<input type="file" accept="application/json" onchange="importarDatos(event)" style="display:none;"></label>
+      </div>
+      <p class="text-xs text-red mt-2">Restaurar reemplaza TODOS los datos actuales por los del archivo. Úsalo solo si necesitas recuperar información.</p>
     </div></div>`;
 }
 function usarMiUbicacion(){
@@ -1115,6 +1197,48 @@ function saveGps(){
   c.gpsRadio=parseInt(document.getElementById('cfg-gps-radio').value)||100;
   if(c.gpsActivo && (!c.gpsLat||!c.gpsLng)){ toast('Ingrese las coordenadas o use "Usar mi ubicación actual"','error'); return; }
   DB.set('config',c); logAudit('Modificó control GPS',c.gpsActivo?'Activado':'Desactivado'); toast('Configuración GPS guardada','success');
+}
+function cargarLogo(e){
+  const file=e.target.files[0]; if(!file) return;
+  if(file.size>500000){ toast('La imagen es muy grande. Use una de menos de 500 KB.','error'); return; }
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const c=DB.get('config')||{}; c.logo=ev.target.result; DB.set('config',c);
+    toast('Logo cargado','success'); showPage('config');
+  };
+  reader.readAsDataURL(file);
+}
+function quitarLogo(){ const c=DB.get('config')||{}; c.logo=''; DB.set('config',c); toast('Logo quitado','info'); showPage('config'); }
+
+// ----- Respaldo de datos (exportar / importar) -----
+function exportarDatos(){
+  const data={}; FIREBASE_KEYS.forEach(k=>{ data[k]=DB.get(k); });
+  data._exportado=now(); data._version='PortalImperial1';
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const fecha=new Date(ahoraMs()).toISOString().split('T')[0];
+  a.href=url; a.download=`respaldo-portal-imperial-${fecha}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  logAudit('Exportó respaldo de datos');
+  toast('Respaldo descargado','success');
+}
+function importarDatos(e){
+  const file=e.target.files[0]; if(!file) return;
+  if(!confirm('⚠ ATENCIÓN: Importar un respaldo REEMPLAZARÁ todos los datos actuales (ventas, caja, empleados, etc.) por los del archivo. Esto afecta a todos los dispositivos. ¿Está seguro?')){ e.target.value=''; return; }
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    try{
+      const data=JSON.parse(ev.target.result);
+      if(data._version!=='PortalImperial1'){ toast('El archivo no es un respaldo válido','error'); return; }
+      FIREBASE_KEYS.forEach(k=>{ if(data[k]!==undefined && data[k]!==null) DB.set(k,data[k]); });
+      logAudit('Importó respaldo de datos',data._exportado||'');
+      toast('Respaldo importado correctamente','success');
+      setTimeout(()=>{ showPage('dashboard'); },800);
+    }catch(err){ toast('Error al leer el archivo','error'); }
+  };
+  reader.readAsText(file);
+  e.target.value='';
 }
 function saveConfig(){
   const c=DB.get('config')||{};
@@ -1313,7 +1437,32 @@ function buildModals(){
 }
 
 // ========================= CLOCK / TIMERS =========================
-function updateClock(){ const el=document.getElementById('time-display'); if(el) el.textContent=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+function updateClock(){ const el=document.getElementById('time-display'); if(el) el.textContent=new Date(ahoraMs()).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+
+// ----- Modo táctil -----
+function toggleTactil(){
+  document.body.classList.toggle('tactil');
+  const on=document.body.classList.contains('tactil');
+  try{ localStorage.setItem('pi_tactil', on?'1':'0'); }catch(e){}
+  toast(on?'Modo táctil activado':'Modo táctil desactivado','info');
+}
+function aplicarTactilGuardado(){ try{ if(localStorage.getItem('pi_tactil')==='1') document.body.classList.add('tactil'); }catch(e){} }
+
+// ----- Bloqueo de pantalla por PIN/contraseña -----
+function bloquearPantalla(){
+  if(!STATE.user) return;
+  document.getElementById('lock-user').textContent=STATE.user.nombre+' — '+STATE.user.usuario;
+  document.getElementById('lock-pass').value='';
+  document.getElementById('lock-error').style.display='none';
+  document.getElementById('lock-screen').style.display='flex';
+  setTimeout(()=>document.getElementById('lock-pass').focus(),100);
+}
+function ocultarBloqueo(){ document.getElementById('lock-screen').style.display='none'; }
+function desbloquearPantalla(){
+  const pass=document.getElementById('lock-pass').value;
+  if(STATE.user && pass===STATE.user.pass){ ocultarBloqueo(); }
+  else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
+}
 setInterval(updateClock,1000);
 setInterval(()=>{ if(STATE.page==='cocina'||STATE.page==='listos'){ showPage(STATE.page); } updateBadges(); },15000);
 let lastAct=Date.now();
@@ -1336,8 +1485,27 @@ function showConexion(estado){
 function bootApp(){
   buildModals();
   updateClock();
+  aplicarTactilGuardado();
+  // Mostrar logo en el login si existe
+  const logo=(DB.get('config')||{}).logo||window.LOGO_DEFAULT;
+  if(logo){ const img=document.getElementById('login-logo-img'); const fb=document.getElementById('login-logo-fallback');
+    if(img){ img.src=logo; img.style.display='block'; } if(fb) fb.style.display='none'; }
   document.getElementById('login-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
   document.getElementById('login-user').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('login-pass').focus(); });
+  document.getElementById('lock-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') desbloquearPantalla(); });
+  // Atajos de teclado para cajeros rápidos
+  document.addEventListener('keydown',e=>{
+    if(!STATE.user) return;
+    if(document.getElementById('lock-screen').style.display==='flex') return;
+    // Solo si no está escribiendo en un campo
+    const tag=(e.target.tagName||'').toLowerCase();
+    if(tag==='input'||tag==='select'||tag==='textarea') return;
+    if(e.key==='F2'){ e.preventDefault(); if(STATE.user.rol!=='cocina'&&STATE.user.rol!=='biometria') showPage('ventas'); }
+    else if(e.key==='F3'){ e.preventDefault(); showPage('pedidos'); }
+    else if(e.key==='F4'){ e.preventDefault(); showPage('caja'); }
+    else if(e.key==='F8'){ e.preventDefault(); bloquearPantalla(); }
+    else if(e.key==='Escape'){ document.querySelectorAll('.modal-overlay').forEach(m=>{ if(m.style.display==='flex') m.style.display='none'; }); }
+  });
 }
 
 function startFirebase(){
@@ -1355,6 +1523,13 @@ function startFirebase(){
 
   // Estado de conexión
   fbDB.ref('.info/connected').on('value', s=>{ showConexion(s.val()?'ok':'off'); });
+
+  // Hora real del servidor: Firebase entrega la diferencia con el reloj local.
+  // Así, aunque alguien cambie la hora de su dispositivo, las marcaciones y ventas usan la hora real.
+  fbDB.ref('.info/serverTimeOffset').on('value', s=>{
+    const off = s.val();
+    if(typeof off==='number') SERVER_OFFSET = off;
+  });
 
   // Carga inicial completa
   fbDB.ref('data').once('value').then(snap=>{

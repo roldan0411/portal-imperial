@@ -201,6 +201,17 @@ select option { background: var(--dark2); }
 }
 #print-area { display: none; font-family: 'Courier New', monospace; font-size: 12px; color: #000; background: #fff; padding: 10px; width: 300px; }
 
+/* MODO TÁCTIL: botones y elementos más grandes */
+body.tactil .btn { padding: 14px 22px; font-size: 15px; }
+body.tactil .btn-sm { padding: 11px 16px; font-size: 14px; }
+body.tactil .menu-item-card { padding: 18px 14px; }
+body.tactil .menu-item-card .item-name { font-size: 14px; }
+body.tactil .menu-item-card .item-price { font-size: 15px; }
+body.tactil .nav-item { padding: 13px 14px; font-size: 15px; }
+body.tactil input, body.tactil select { padding: 14px 16px; font-size: 16px; }
+body.tactil .cat-tab { padding: 10px 18px; font-size: 14px; }
+body.tactil .order-item-row .btn-icon { width: 32px !important; height: 32px !important; font-size: 18px !important; }
+
 @media (max-width: 900px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .pos-layout { grid-template-columns: 1fr; height: auto; }
@@ -263,7 +274,8 @@ select option { background: var(--dark2); }
 <div id="login-screen">
   <div class="login-card">
     <div class="login-logo">
-      <svg class="ic crest"><use href="#i-crest"/></svg>
+      <img id="login-logo-img" src="" alt="" style="max-height:90px;display:none;margin:0 auto 10px;">
+      <svg class="ic crest" id="login-logo-fallback"><use href="#i-crest"/></svg>
       <h1>Portal Imperial</h1>
       <p>Sistema POS</p>
     </div>
@@ -339,6 +351,8 @@ select option { background: var(--dark2); }
       </div>
       <div class="topbar-right">
         <div class="time-display" id="time-display"></div>
+        <button class="btn btn-ghost btn-sm" onclick="toggleTactil()" id="btn-tactil" title="Modo táctil"><svg class="ic"><use href="#i-table"/></svg></button>
+        <button class="btn btn-ghost btn-sm" onclick="bloquearPantalla()" title="Bloquear pantalla"><svg class="ic"><use href="#i-lock"/></svg></button>
         <button class="btn btn-ghost btn-sm" onclick="doLogout()"><svg class="ic"><use href="#i-logout"/></svg> Salir</button>
       </div>
     </div>
@@ -348,10 +362,22 @@ select option { background: var(--dark2); }
 
 <div id="modals"></div>
 
+<!-- PANTALLA DE BLOQUEO -->
+<div id="lock-screen" style="display:none;position:fixed;inset:0;z-index:2000;background:radial-gradient(ellipse at 50% 40%,#1a0505,#000);align-items:center;justify-content:center;flex-direction:column;">
+  <svg class="ic crest" style="width:54px;height:54px;color:var(--gold);margin-bottom:14px;"><use href="#i-lock"/></svg>
+  <h2 style="font-family:'Cinzel',serif;color:var(--gold);letter-spacing:2px;margin-bottom:6px;">Pantalla Bloqueada</h2>
+  <p id="lock-user" style="color:var(--gray3);font-size:13px;margin-bottom:20px;"></p>
+  <input type="password" id="lock-pass" placeholder="Su contraseña" style="width:240px;text-align:center;font-size:18px;letter-spacing:3px;" inputmode="text">
+  <p id="lock-error" style="color:var(--red-light);font-size:12px;margin-top:10px;display:none;">Contraseña incorrecta</p>
+  <button class="btn btn-gold mt-2" onclick="desbloquearPantalla()" style="width:240px;padding:13px;">Desbloquear</button>
+  <button class="btn btn-ghost btn-sm mt-2" onclick="doLogout();ocultarBloqueo()">Cerrar sesión</button>
+</div>
+
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="logo.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
