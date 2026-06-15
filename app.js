@@ -25,6 +25,10 @@ function today(){ return new Date().toISOString().split('T')[0]; }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
+// Métodos de pago del sistema (centralizados)
+const METODOS_PAGO = [['efectivo','Efectivo'],['banco','Banco'],['tarjeta','Tarjeta'],['llave','Llave']];
+function opcionesMetodo(sel){ return METODOS_PAGO.map(([v,l])=>`<option value="${v}" ${sel===v?'selected':''}>${l}</option>`).join(''); }
+function nombreMetodo(m){ const f=METODOS_PAGO.find(x=>x[0]===m); return f?f[1]:(m||'—'); }
 
 function nextFactura(){ const n=(DB.get('factura_seq')||0)+1; DB.set('factura_seq',n); return 'PI-'+String(n).padStart(6,'0'); }
 // Número de orden para cocina, se reinicia cada día (#001, #002...)
@@ -97,7 +101,8 @@ function initData(){
   if(!DB.get('config')) DB.set('config',{
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
     numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false,
-    gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100, logo:(window.LOGO_DEFAULT||'')
+    gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100, logo:(window.LOGO_DEFAULT||''),
+    marcaAgua:'WALLACE COMPANY SYSTEM ING CCIA ROLDAN A.', marcaAguaActiva:true
   });
   // Si ya existe config pero sin logo, poner el logo por defecto
   (function(){ const c=DB.get('config')||{}; if(!c.logo && window.LOGO_DEFAULT){ c.logo=window.LOGO_DEFAULT; DB.set('config',c); } })();
@@ -105,7 +110,7 @@ function initData(){
 
 // ========================= STATE =========================
 const STATE = { user:null, page:'dashboard', order:[], descuento:0, descMot:'',
-  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, propina:0, orderObs:'', editandoVenta:null };
+  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, propina:0, recargo:0, orderObs:'', editandoVenta:null };
 
 // ========================= AUTH =========================
 function doLogin(){
@@ -134,7 +139,8 @@ function doLogin(){
     if(img){ img.src=logoSb; img.style.display='block'; } if(fb) fb.style.display='none'; }
   buildSidebar();
   logAudit('Inicio de sesión');
-  showPage(user.rol==='cocina'?'cocina':'dashboard');
+  const landing = user.rol==='cocina'?'cocina' : (user.rol==='mesero')?'ventas' : (user.rol==='cajero')?'caja' : 'dashboard';
+  showPage(landing);
 }
 function doLogout(){
   if(STATE.user) logAudit('Cierre de sesión');
@@ -206,17 +212,17 @@ function registrarMarcacion(emp,tipo){
 // ========================= SIDEBAR =========================
 const NAV = [
   {sec:'Principal'},
-  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','cajero','supervisor']},
-  {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor']},
-  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor'],badge:'activos'},
-  {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor'],badge:'listos'},
+  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor']},
+  {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero']},
+  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero'],badge:'activos'},
+  {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero'],badge:'listos'},
   {sec:'Operaciones'},
   {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor']},
-  {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor']},
+  {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero']},
   {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor'],badge:'cocina'},
   {sec:'Gestión'},
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
-  {id:'historial',icon:'i-history',label:'Historial',roles:['admin','cajero','supervisor']},
+  {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor']},
   {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
   {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor']},
@@ -238,7 +244,7 @@ function updateBadges(){
   const vs=DB.get('ventas')||[];
   const counts={
     activos: vs.filter(v=>v.estado!=='anulada' && v.estadoPedido!=='entregado').length,
-    listos: vs.filter(v=>v.estadoCocina==='listo' && v.estadoPedido!=='entregado').length,
+    listos: vs.filter(v=>v.estadoCocina==='listo' && v.estadoPedido!=='entregado' && v.estado!=='anulada').length,
     cocina: vs.filter(v=>v.estado!=='anulada' && v.estadoPedido!=='entregado' && v.estadoCocina!=='listo').length,
   };
   ['activos','listos','cocina'].forEach(k=>{
@@ -282,8 +288,8 @@ function dashboard(){
   const mes=vs.filter(v=>v.fecha>=ma.toISOString().split('T')[0]&&esPagada(v));
   const activos=vs.filter(v=>v.estadoPedido==='activo'&&v.estado!=='anulada').length;
   const entregados=vs.filter(v=>v.estadoPedido==='entregado').length;
-  const metodos={efectivo:0,nequi:0,daviplata:0,tarjeta:0};
-  hoy.forEach(v=>{ if(metodos[v.metodo]!==undefined) metodos[v.metodo]+=v.total; });
+  const metodos={}; METODOS_PAGO.forEach(([k])=>metodos[k]=0);
+  hoy.forEach(v=>{ if(metodos[v.metodo]!==undefined) metodos[v.metodo]+=(v.ventaReal!==undefined?v.ventaReal:v.total); });
   const days=[];
   for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5); const dk=d.toISOString().split('T')[0];
     days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)).reduce((a,v)=>a+v.total,0)}); }
@@ -299,7 +305,7 @@ function dashboard(){
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-report')} Ventas Últimos 7 Días</div><div class="bar-chart">${bars}</div></div>
     <div class="card"><div class="card-title">${ic('i-cash')} Métodos de Pago (Hoy)</div>
-      ${Object.entries({efectivo:'Efectivo',nequi:'Nequi',daviplata:'Daviplata',tarjeta:'Tarjeta'}).map(([k,l])=>`<div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.04)"><span class="text-sm">${l}</span><span class="text-gold font-bold">${fmtMoney(metodos[k])}</span></div>`).join('')}
+      ${METODOS_PAGO.map(([k,l])=>`<div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.04)"><span class="text-sm">${l}</span><span class="text-gold font-bold">${fmtMoney(metodos[k])}</span></div>`).join('')}
     </div>
   </div>
   <div class="card"><div class="card-title">${ic('i-history')} Últimas Ventas</div>
@@ -381,16 +387,22 @@ function renderCamposTipo(){
   if(STATE.tipoPedido==='mesa'){
     html=`<select class="mini-input" style="margin-bottom:8px;" onchange="STATE.mesa=this.value"><option value="">Seleccionar mesa...</option>${Array.from({length:nMesas},(_,i)=>`<option value="Mesa ${i+1}" ${STATE.mesa==='Mesa '+(i+1)?'selected':''}>Mesa ${i+1}</option>`).join('')}</select>`;
   } else if(STATE.tipoPedido==='llevar'){
-    html=`<input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value">
-    <input type="text" class="mini-input" style="margin-bottom:8px;" placeholder="Teléfono (opcional)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value">`;
+    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;autoFillPorTel(this.value)">
+    <input type="text" class="mini-input" list="clientes-list" style="margin-bottom:8px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;autoFillCliente(this.value)">`;
   } else if(STATE.tipoPedido==='domicilio'){
-    html=`<input type="text" class="mini-input" list="clientes-list" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;autoFillCliente(this.value)">
-    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono *" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value">
+    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono * (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;autoFillPorTel(this.value)">
+    <input type="text" class="mini-input" list="clientes-list" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;autoFillCliente(this.value)">
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Dirección *" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value">
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
     <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`;
   }
   c.innerHTML=html;
+}
+function autoFillPorTel(tel){
+  if(!tel||tel.length<6) return;
+  const cl=(DB.get('clientes')||[]).find(c=>c.tel===tel);
+  if(cl){ STATE.cliNombre=cl.nombre||''; STATE.cliDir=cl.dir||''; STATE.cliBarrio=cl.barrio||'';
+    renderCamposTipo(); toast('Cliente encontrado: '+cl.nombre,'success'); }
 }
 function autoFillCliente(nombre){
   const cl=(DB.get('clientes')||[]).find(c=>c.nombre.toLowerCase()===nombre.toLowerCase());
@@ -406,7 +418,7 @@ function addToOrder(id){
 function removeFromOrder(id){ STATE.order=STATE.order.filter(x=>x.id!==id); renderOrderPanel(); }
 function changeQty(id,d){ const i=STATE.order.find(x=>x.id===id); if(i){ i.qty=Math.max(1,i.qty+d); renderOrderPanel(); } }
 function setItemObs(id,v){ const i=STATE.order.find(x=>x.id===id); if(i) i.obs=v; }
-function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null;
+function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.propina=0; STATE.recargo=0; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null;
   const o=document.getElementById('order-obs'); if(o)o.value=''; renderCamposTipo(); renderOrderPanel(); }
 
 function renderOrderPanel(){
@@ -440,12 +452,15 @@ function renderOrderPanel(){
     <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>Total</span><span class="text-gold">${fmtMoney(total)}</span></div>
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
-      ${STATE.tipoPedido==='mesa'?'':`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select>`}
+      ${STATE.tipoPedido==='mesa'?'':(STATE.user.rol==='mesero'?'':`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;">${opcionesMetodo('efectivo')}</select>`)}
     </div>
     ${STATE.tipoPedido==='mesa'
       ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
          <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">La mesa queda abierta. Se cobra al final desde Pedidos.</p>`
-      : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(total)}</button>`}`;
+      : (STATE.user.rol==='mesero'
+        ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarPedidoAbierto()" style="font-size:14px;padding:12px;">${ic('i-check')} Enviar a Cocina (sin cobrar)</button>
+           <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">El pedido queda abierto. El cajero lo cobra.</p>`
+        : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(total)}</button>`)}`;
 }
 function applyDescuento(){
   const tipo=document.getElementById('desc-tipo').value, val=parseFloat(document.getElementById('desc-valor').value)||0;
@@ -492,6 +507,33 @@ function guardarMesa(){
   printTicketCocina(venta);
 }
 
+function guardarPedidoAbierto(){
+  if(!DB.get('caja_actual')){ toast('No hay caja abierta. Avise al cajero.','error'); return; }
+  if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
+  if(STATE.tipoPedido==='domicilio' && (!STATE.cliNombre||!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio requiere nombre, teléfono y dirección','error'); return; }
+  if(STATE.tipoPedido==='llevar' && !STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
+  const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
+  const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
+  const ventaReal=Math.max(0,subtotal-(STATE.descuento||0));
+  const esDomicilio = STATE.tipoPedido==='domicilio';
+  const vs=DB.get('ventas')||[];
+  const venta={ id:uid(),factura:'',ordenCocina: esDomicilio?null:nextOrden(),fecha:now(),tipo:STATE.tipoPedido,
+    mesa:'', cliNombre:STATE.cliNombre,cliTel:STATE.cliTel,cliDir:STATE.cliDir,cliBarrio:STATE.cliBarrio,
+    valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
+    total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
+    metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
+    obs:STATE.orderObs, cajero:'', mesero:STATE.user.nombre, creadoPor:STATE.user.nombre, cajaId:DB.get('caja_actual')?.id||null };
+  vs.unshift(venta); DB.set('ventas',vs);
+  if(esDomicilio){
+    const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
+    if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
+    DB.set('clientes',cls);
+  }
+  logAudit('Mesero creó pedido',`${esDomicilio?STATE.cliNombre:'Orden '+venta.ordenCocina} por ${STATE.user.nombre}`);
+  notifyKitchen(); clearOrder();
+  toast('Pedido enviado a cocina. El cajero lo cobrará.','success');
+  printTicketCocina(venta);
+}
 function cobrarVenta(){
   if(!DB.get('caja_actual')){ toast('Debe abrir la caja antes de vender','error'); showPage('caja'); return; }
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
@@ -500,14 +542,19 @@ function cobrarVenta(){
   const metodo=document.getElementById('pay-method')?.value||'efectivo';
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
-  const total=Math.max(0,subtotal+dom-(STATE.descuento||0));
+  // Venta real = ingreso del negocio (NO incluye domicilio)
+  const ventaReal=Math.max(0,subtotal-(STATE.descuento||0));
+  const propina=STATE.propina||0;
+  const recargo=(metodo==='tarjeta')?(STATE.recargo||0):0;
+  const totalCobrado=ventaReal+dom+propina+recargo; // lo que paga el cliente
   const vs=DB.get('ventas')||[];
 
   if(STATE.editandoVenta){
     const v=vs.find(x=>x.id===STATE.editandoVenta.id);
-    if(v){ v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0; v.total=total; v.metodo=metodo; v.obs=STATE.orderObs;
+    if(v){ v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0;
+      v.total=ventaReal; v.propina=propina; v.recargo=recargo; v.totalCobrado=totalCobrado; v.metodo=metodo; v.obs=STATE.orderObs;
       v.modificadoPor=STATE.user.nombre; v.modificadoEn=now(); DB.set('ventas',vs);
-      logAudit('Editó pedido',`${v.factura} por ${STATE.user.nombre}`); toast('Pedido actualizado','success'); }
+      logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado','success'); }
     clearOrder(); showPage('pedidos'); return;
   }
 
@@ -516,17 +563,17 @@ function cobrarVenta(){
   const venta={ id:uid(),factura,ordenCocina: esDomicilio?null:nextOrden(),fecha:now(),tipo:STATE.tipoPedido,
     mesa:STATE.tipoPedido==='mesa'?STATE.mesa:'', cliNombre:STATE.cliNombre,cliTel:STATE.cliTel,cliDir:STATE.cliDir,cliBarrio:STATE.cliBarrio,
     valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
-    total, metodo, estado:'pagada', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
-    obs:STATE.orderObs, cajero:STATE.user?.nombre, cajaId:DB.get('caja_actual')?.id||null };
+    total:ventaReal, ventaReal, propina, recargo, totalCobrado,
+    metodo, estado:'pagada', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
+    obs:STATE.orderObs, cajero:STATE.user?.nombre, cobradoPor:STATE.user?.nombre, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); DB.set('ventas',vs);
 
-  // guardar cliente domicilio
   if(STATE.tipoPedido==='domicilio'){
     const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
-    if(ex){ ex.pedidos=(ex.pedidos||0)+1; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
+    if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
     DB.set('clientes',cls);
   }
-  logAudit('Creó venta',`${factura} - ${fmtMoney(total)}`);
+  logAudit('Creó venta',`${factura||STATE.cliNombre} - venta ${fmtMoney(ventaReal)}`);
   notifyKitchen();
   clearOrder();
   toast(esDomicilio?'Domicilio registrado':`Venta registrada: ${factura}`,'success');
@@ -575,10 +622,11 @@ function printFactura(v){
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:8px 0;display:flex;justify-content:space-between;font-size:16px;font-weight:bold;">
       <span>TOTAL</span><span>${fmtMoney(v.total)}</span>
     </div>
-    <div style="text-align:center;font-size:10px;margin-top:4px;">Forma de pago: ${(v.metodo||'').toUpperCase()}</div>
+    <div style="text-align:center;font-size:10px;margin-top:4px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
     <div style="text-align:center;margin-top:14px;font-size:11px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
     <div style="text-align:center;font-size:9px;color:#555;margin-top:4px;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
+    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:8px;color:#999;margin-top:10px;letter-spacing:1px;border-top:1px dotted #ccc;padding-top:6px;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
   </div>`;
   pa.style.display='block'; window.print(); pa.style.display='none';
 }
@@ -686,29 +734,47 @@ let cobrandoMesaId=null, cobroBaseTotal=0;
 function abrirCobroMesa(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   cobrandoMesaId=id; cobroBaseTotal=v.total;
-  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(v.mesa)}</strong> · ${v.items.length} platos · Subtotal <span class="text-gold font-bold">${fmtMoney(v.total)}</span>`;
+  const ref = v.tipo==='mesa'?v.mesa : (v.cliNombre||refPedido(v));
+  const extra = v.valorDom>0?` + domicilio ${fmtMoney(v.valorDom)}`:'';
+  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(ref)}</strong> · ${v.items.length} platos · Venta <span class="text-gold font-bold">${fmtMoney(v.total)}</span>${extra}`;
   const p=document.getElementById('cobro-propina'); if(p) p.value=0;
+  const r=document.getElementById('cobro-recargo'); if(r) r.value=0;
+  document.getElementById('cobro-metodo').value='efectivo';
   openModal('modal-cobro');
   actualizarTotalCobro();
 }
 function actualizarTotalCobro(){
   const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
+  const metodo=document.getElementById('cobro-metodo')?.value;
+  // Mostrar recargo solo si es tarjeta
+  const recWrap=document.getElementById('cobro-recargo-wrap');
+  if(recWrap) recWrap.style.display = metodo==='tarjeta'?'block':'none';
+  const recargo = metodo==='tarjeta' ? (parseFloat(document.getElementById('cobro-recargo')?.value)||0) : 0;
   const el=document.getElementById('cobro-total-final');
-  if(el) el.textContent=fmtMoney(cobroBaseTotal+propina);
+  // El cliente paga: venta + propina + recargo (propina y recargo NO son ingreso del negocio)
+  if(el) el.textContent=fmtMoney(cobroBaseTotal+propina+recargo);
 }
 function confirmarCobroMesa(){
   const id=cobrandoMesaId; if(!id) return;
   const metodo=document.getElementById('cobro-metodo').value;
   const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
+  const recargo = metodo==='tarjeta' ? (parseFloat(document.getElementById('cobro-recargo')?.value)||0) : 0;
   const vs=DB.get('ventas')||[];
   const v=vs.find(x=>x.id===id); if(!v){ closeModal('modal-cobro'); return; }
-  v.propina=propina; v.total=v.total+propina;
-  v.estado='pagada'; v.metodo=metodo; v.factura=nextFactura(); v.fechaCobro=now();
+  const dom=v.valorDom||0;
+  v.ventaReal=v.total;          // ingreso del negocio
+  v.propina=propina;            // pertenece al mesero
+  v.recargo=recargo;            // pertenece al datáfono
+  v.totalCobrado=v.total+dom+propina+recargo;  // lo que el cliente pagó (incluye domicilio)
+  v.estado='pagada'; v.metodo=metodo; v.fechaCobro=now();
+  if(!v.factura && v.tipo!=='domicilio') v.factura=nextFactura(); // domicilio sin factura
+  v.cobradoPor=STATE.user.nombre;
   v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
   DB.set('ventas',vs);
-  logAudit('Cobró mesa',`${v.mesa} → ${v.factura} - ${fmtMoney(v.total)} (${metodo})${propina>0?' propina '+fmtMoney(propina):''}`);
+  const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre);
+  logAudit('Cobró pedido',`${ref} - venta ${fmtMoney(v.ventaReal)} (${nombreMetodo(metodo)})${propina>0?' propina '+fmtMoney(propina):''}${recargo>0?' recargo '+fmtMoney(recargo):''}`);
   closeModal('modal-cobro'); cobrandoMesaId=null;
-  toast(`${v.mesa} cobrada: ${v.factura}`,'success');
+  toast(`${ref} cobrada`,'success');
   printFactura(v);
   showPage('pedidos');
 }
@@ -789,43 +855,76 @@ function caja(){
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
-  const nq=vs.filter(v=>v.metodo==='nequi').reduce((a,v)=>a+v.total,0);
-  const dp=vs.filter(v=>v.metodo==='daviplata').reduce((a,v)=>a+v.total,0);
-  const tc=vs.filter(v=>v.metodo==='tarjeta').reduce((a,v)=>a+v.total,0);
-  const totalV=ef+nq+dp+tc;
+  // Ingresos reales por método (solo venta real, sin propina/domicilio/recargo)
+  const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=0);
+  vs.forEach(v=>{ if(porMetodo[v.metodo]!==undefined) porMetodo[v.metodo]+=(v.ventaReal!==undefined?v.ventaReal:v.total); });
+  const totalV=Object.values(porMetodo).reduce((a,b)=>a+b,0);
+  // Conceptos que NO son ingreso del negocio
+  const totalPropinas=vs.reduce((a,v)=>a+(v.propina||0),0);
+  const totalDomicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
+  const totalRecargos=vs.reduce((a,v)=>a+(v.recargo||0),0);
+  // Movimientos de caja
   const entradas=movs.filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=movs.filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
-  const enCaja=c.fondo+ef+entradas-gastos;
-  return `<div class="stats-grid">
-    <div class="stat-card green"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Efectivo</div><div class="stat-value">${fmtMoney(ef)}</div></div>
-    <div class="stat-card blue"><div class="stat-icon">${ic('i-phone')}</div><div class="stat-label">Nequi</div><div class="stat-value">${fmtMoney(nq)}</div></div>
-    <div class="stat-card gold"><div class="stat-icon">${ic('i-phone')}</div><div class="stat-label">Daviplata</div><div class="stat-value">${fmtMoney(dp)}</div></div>
-    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Tarjeta</div><div class="stat-value">${fmtMoney(tc)}</div></div>
-  </div>
+  const retiros=movs.filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
+  // Efectivo en caja: fondo + ventas efectivo + domicilios efectivo + propinas efectivo + recargos efectivo + entradas - gastos - retiros
+  const efectivoVentas=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+(v.totalCobrado!==undefined?v.totalCobrado:v.total),0);
+  const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros;
+  const puedeRetiro = STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
+
+  const cards=METODOS_PAGO.map(([k,l],i)=>{ const colores=['green','blue','gold','red']; return `<div class="stat-card ${colores[i%4]}"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${l}</div><div class="stat-value">${fmtMoney(porMetodo[k])}</div></div>`; }).join('');
+
+  return `<div class="stats-grid">${cards}</div>
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-cash')} Resumen de Caja — ${escapeHtml(c.cajero)}</div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Apertura</span><span class="text-sm">${fmtDate(c.apertura)}</span></div>
-      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Fondo Inicial</span><strong>${fmtMoney(c.fondo)}</strong></div>
-      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Total Ventas</span><strong class="text-gold">${fmtMoney(totalV)}</strong></div>
+      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Base Inicial</span><strong>${fmtMoney(c.fondo)}</strong></div>
+      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Ventas Reales</span><strong class="text-gold">${fmtMoney(totalV)}</strong></div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Entradas Extra</span><strong class="text-green">${fmtMoney(entradas)}</strong></div>
-      <div class="flex-between" style="padding:7px 0;"><span>Gastos / Nómina / Salidas</span><strong class="text-red">-${fmtMoney(gastos)}</strong></div>
+      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Gastos / Nómina</span><strong class="text-red">-${fmtMoney(gastos)}</strong></div>
+      <div class="flex-between" style="padding:7px 0;"><span>Retiros Autorizados</span><strong class="text-red">-${fmtMoney(retiros)}</strong></div>
       <hr class="divider">
       <div class="flex-between" style="font-size:18px;font-weight:700;"><span>Efectivo en Caja</span><span class="text-gold">${fmtMoney(enCaja)}</span></div>
-      <div style="display:flex;gap:8px;margin-top:16px;">
-        <button class="btn btn-ghost" onclick="openModal('modal-movimiento')">${ic('i-money-out')} Gasto / Movimiento</button>
+      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="openModal('modal-movimiento')">${ic('i-money-out')} Gasto</button>
+        ${puedeRetiro?`<button class="btn btn-ghost" onclick="openModalRetiro()">${ic('i-money-out')} Retiro</button>`:''}
         <button class="btn btn-danger" onclick="cerrarCaja()" style="flex:1;">${ic('i-lock')} Cerrar Caja</button>
       </div></div>
-    <div class="card"><div class="card-title">${ic('i-orders')} Movimientos del Día</div>
-      ${movs.length===0?`<p class="text-gray text-sm">Sin gastos ni movimientos registrados</p>`:
-      `<div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descripción</th><th>Monto</th><th>Hora</th></tr></thead><tbody>${movs.slice().reverse().map(m=>`<tr><td>${movBadge(m.tipo)}</td><td>${escapeHtml(m.desc)}${m.empleado?'<br><span class="text-xs text-gray">'+escapeHtml(m.empleado)+'</span>':''}</td><td class="${m.tipo==='entrada'?'text-green':'text-red'}">${m.tipo==='entrada'?'+':'-'}${fmtMoney(m.monto)}</td><td class="text-xs text-gray">${fmtDate(m.fecha)}</td></tr>`).join('')}</tbody></table></div>`}
-    </div></div>`;
+    <div class="card"><div class="card-title">${ic('i-orders')} No son ingreso del negocio</div>
+      <p class="text-xs text-gray mb-2">Estos valores se cobran pero pertenecen a terceros. No suman a las ventas reales.</p>
+      <div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${ic('i-users')} Propinas (del mesero)</span><strong class="text-green">${fmtMoney(totalPropinas)}</strong></div>
+      <div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${ic('i-delivery')} Domicilios (del domiciliario)</span><strong class="text-blue">${fmtMoney(totalDomicilios)}</strong></div>
+      <div class="flex-between" style="padding:9px 0;"><span>${ic('i-cash')} Recargos datáfono</span><strong class="text-gold">${fmtMoney(totalRecargos)}</strong></div>
+      ${totalPropinas>0?`<hr class="divider"><div class="card-title" style="font-size:11px;">Propinas por mesero</div>${propinasPorMesero(vs)}`:''}
+    </div></div>
+  <div class="card"><div class="card-title">${ic('i-orders')} Movimientos del Día</div>
+    ${movs.length===0?`<p class="text-gray text-sm">Sin movimientos registrados</p>`:
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descripción</th><th>Usuario</th><th>Monto</th><th>Hora</th></tr></thead><tbody>${movs.slice().reverse().map(m=>`<tr><td>${movBadge(m.tipo)}</td><td>${escapeHtml(m.desc)}${m.empleado?'<br><span class="text-xs text-gray">'+escapeHtml(m.empleado)+'</span>':''}</td><td class="text-xs">${escapeHtml(m.usuario||'')}</td><td class="${m.tipo==='entrada'?'text-green':'text-red'}">${m.tipo==='entrada'?'+':'-'}${fmtMoney(m.monto)}</td><td class="text-xs text-gray">${fmtDate(m.fecha)}</td></tr>`).join('')}</tbody></table></div>`}
+  </div>`;
 }
-function movBadge(t){ const m={entrada:['badge-green','Entrada'],salida:['badge-red','Salida'],gasto:['badge-orange','Gasto'],nomina:['badge-red','Nómina']}; const x=m[t]||['badge-gray',t]; return `<span class="badge ${x[0]}">${x[1]}</span>`; }
+function propinasPorMesero(vs){
+  const x={}; vs.forEach(v=>{ if(v.propina>0){ const m=v.mesero||v.cajero||'—'; x[m]=(x[m]||0)+v.propina; } });
+  return Object.entries(x).map(([m,t])=>`<div class="flex-between text-sm" style="padding:4px 0;"><span>${escapeHtml(m)}</span><span class="text-green">${fmtMoney(t)}</span></div>`).join('')||'<span class="text-xs text-gray">—</span>';
+}
+function movBadge(t){ const m={entrada:['badge-green','Entrada'],salida:['badge-red','Salida'],gasto:['badge-orange','Gasto'],nomina:['badge-red','Nómina'],retiro:['badge-blue','Retiro']}; const x=m[t]||['badge-gray',t]; return `<span class="badge ${x[0]}">${x[1]}</span>`; }
 function abrirCaja(){
   const fondo=parseFloat(document.getElementById('caja-fondo').value)||0;
   DB.set('caja_actual',{id:uid(),cajero:STATE.user.nombre,apertura:now(),fondo,movimientos:[]});
-  logAudit('Abrió caja',`Fondo: ${fmtMoney(fondo)}`); closeModal('modal-caja'); toast('Caja abierta','success'); showPage('caja');
+  logAudit('Abrió caja',`Base: ${fmtMoney(fondo)}`); closeModal('modal-caja'); toast('Caja abierta','success'); showPage('caja');
+}
+function openModalRetiro(){
+  document.getElementById('ret-monto').value=''; document.getElementById('ret-motivo').value='';
+  openModal('modal-retiro');
+}
+function saveRetiro(){
+  const monto=parseFloat(document.getElementById('ret-monto').value)||0;
+  const motivo=document.getElementById('ret-motivo').value.trim();
+  if(monto<=0){ toast('Ingrese un monto válido','error'); return; }
+  const c=DB.get('caja_actual'); if(!c) return;
+  c.movimientos.push({tipo:'retiro',monto,desc:motivo||'Retiro de efectivo',usuario:STATE.user.nombre,fecha:now()});
+  DB.set('caja_actual',c);
+  logAudit('Retiro de efectivo',`${fmtMoney(monto)} - ${motivo} (por ${STATE.user.nombre})`);
+  closeModal('modal-retiro'); toast('Retiro registrado','success'); showPage('caja');
 }
 function saveMovimiento(){
   const tipo=document.getElementById('mov-tipo').value;
@@ -834,7 +933,7 @@ function saveMovimiento(){
   const empleado=document.getElementById('mov-empleado').value;
   if(monto<=0){ toast('Ingrese un monto válido','error'); return; }
   const c=DB.get('caja_actual'); if(!c) return;
-  c.movimientos.push({tipo,monto,desc:desc||(tipo==='nomina'?'Pago de nómina':tipo),empleado,fecha:now()});
+  c.movimientos.push({tipo,monto,desc:desc||(tipo==='nomina'?'Pago de nómina':tipo),empleado,usuario:STATE.user.nombre,fecha:now()});
   DB.set('caja_actual',c);
   logAudit('Registró '+tipo,`${fmtMoney(monto)} - ${desc} ${empleado?'('+empleado+')':''}`);
   closeModal('modal-movimiento'); toast('Movimiento registrado','success'); showPage('caja');
@@ -846,11 +945,11 @@ function toggleEmpleadoField(){
 function cerrarCaja(){
   const c=DB.get('caja_actual'); if(!c) return;
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
+  const efectivoVentas=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+(v.totalCobrado!==undefined?v.totalCobrado:v.total),0);
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
-  const gastos=(c.movimientos||[]).filter(m=>m.tipo!=='entrada').reduce((a,m)=>a+m.monto,0);
-  const esperadoEfectivo=c.fondo+ef+entradas-gastos;
-  // Guardar el esperado para el cálculo del cuadre
+  const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
+  const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
   window._cierreEsperado=esperadoEfectivo;
   document.getElementById('cierre-esperado').textContent=fmtMoney(esperadoEfectivo);
   document.getElementById('cierre-contado').value='';
@@ -874,18 +973,21 @@ function confirmarCierre(){
   if(isNaN(contado)){ toast('Ingrese el efectivo contado','error'); return; }
   const obs=document.getElementById('cierre-obs').value;
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  const ef=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+v.total,0);
-  const nq=vs.filter(v=>v.metodo==='nequi').reduce((a,v)=>a+v.total,0);
-  const dp=vs.filter(v=>v.metodo==='daviplata').reduce((a,v)=>a+v.total,0);
-  const tc=vs.filter(v=>v.metodo==='tarjeta').reduce((a,v)=>a+v.total,0);
+  const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=vs.filter(v=>v.metodo===k).reduce((a,v)=>a+(v.ventaReal!==undefined?v.ventaReal:v.total),0));
+  const totalVentas=Object.values(porMetodo).reduce((a,b)=>a+b,0);
+  const propinas=vs.reduce((a,v)=>a+(v.propina||0),0);
+  const domicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
+  const recargos=vs.reduce((a,v)=>a+(v.recargo||0),0);
+  const efectivoVentas=vs.filter(v=>v.metodo==='efectivo').reduce((a,v)=>a+(v.totalCobrado!==undefined?v.totalCobrado:v.total),0);
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
-  const gastos=(c.movimientos||[]).filter(m=>m.tipo!=='entrada').reduce((a,m)=>a+m.monto,0);
-  const esperadoEfectivo=c.fondo+ef+entradas-gastos;
+  const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
+  const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
   const diferencia=contado-esperadoEfectivo;
-  const cierre={...c,cierre:now(),efectivo:ef,nequi:nq,daviplata:dp,tarjeta:tc,gastos,entradas,
-    total:ef+nq+dp+tc, esperadoEfectivo, contadoEfectivo:contado, diferencia, obsCierre:obs};
+  const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,
+    total:totalVentas, esperadoEfectivo, contadoEfectivo:contado, baseFinal:contado, diferencia, obsCierre:obs, cerradoPor:STATE.user.nombre};
   const cs=DB.get('cierres')||[]; cs.unshift(cierre); DB.set('cierres',cs); DB.set('caja_actual',null);
-  logAudit('Cerró caja',`${c.cajero} - Ventas: ${fmtMoney(cierre.total)} - ${diferencia===0?'Cuadrada':diferencia>0?'Sobra '+fmtMoney(diferencia):'Falta '+fmtMoney(Math.abs(diferencia))}`);
+  logAudit('Cerró caja',`${c.cajero} - Ventas: ${fmtMoney(totalVentas)} - ${diferencia===0?'Cuadrada':diferencia>0?'Sobra '+fmtMoney(diferencia):'Falta '+fmtMoney(Math.abs(diferencia))}`);
   closeModal('modal-cierre');
   toast(diferencia===0?'Caja cerrada y cuadrada':diferencia>0?`Caja cerrada. Sobran ${fmtMoney(diferencia)}`:`Caja cerrada. Faltan ${fmtMoney(Math.abs(diferencia))}`, diferencia===0?'success':'error');
   imprimirCierre(cierre);
@@ -903,16 +1005,19 @@ function imprimirCierre(c){
       <div style="display:flex;justify-content:space-between;"><span>Cierre:</span><span>${fmtDate(c.cierre)}</span></div>
     </div>
     <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:11px;line-height:1.7;">
-      <div style="display:flex;justify-content:space-between;"><span>Fondo inicial</span><span>${fmtMoney(c.fondo)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Ventas efectivo</span><span>${fmtMoney(c.efectivo)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Ventas Nequi</span><span>${fmtMoney(c.nequi)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Ventas Daviplata</span><span>${fmtMoney(c.daviplata)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Ventas tarjeta</span><span>${fmtMoney(c.tarjeta)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Entradas</span><span>${fmtMoney(c.entradas)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Gastos/salidas</span><span>-${fmtMoney(c.gastos)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Base inicial</span><span>${fmtMoney(c.fondo)}</span></div>
+      ${METODOS_PAGO.map(([k,l])=>`<div style="display:flex;justify-content:space-between;"><span>Ventas ${l}</span><span>${fmtMoney((c.porMetodo&&c.porMetodo[k])||0)}</span></div>`).join('')}
+      <div style="display:flex;justify-content:space-between;"><span>Entradas</span><span>${fmtMoney(c.entradas||0)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Gastos/nómina</span><span>-${fmtMoney(c.gastos||0)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Retiros</span><span>-${fmtMoney(c.retiros||0)}</span></div>
+    </div>
+    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:10px;line-height:1.6;color:#333;">
+      <div style="display:flex;justify-content:space-between;"><span>Propinas (no ingreso)</span><span>${fmtMoney(c.propinas||0)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Domicilios (no ingreso)</span><span>${fmtMoney(c.domicilios||0)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Recargos datáfono</span><span>${fmtMoney(c.recargos||0)}</span></div>
     </div>
     <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:12px;line-height:1.8;">
-      <div style="display:flex;justify-content:space-between;font-weight:bold;"><span>Total ventas</span><span>${fmtMoney(c.total)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-weight:bold;"><span>Total ventas reales</span><span>${fmtMoney(c.total)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Efectivo esperado</span><span>${fmtMoney(c.esperadoEfectivo)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Efectivo contado</span><span>${fmtMoney(c.contadoEfectivo)}</span></div>
     </div>
@@ -1127,6 +1232,11 @@ function config(){
       </div>
       <button class="btn btn-gold" onclick="saveConfig()">${ic('i-check')} Guardar</button>
     </div>
+    <div class="card"><div class="card-title">${ic('i-edit')} Marca de Agua en Facturas</div>
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-marca-activa" ${c.marcaAguaActiva?'checked':''} style="width:auto;"> Mostrar marca de agua en las facturas</label>
+      <div class="form-group"><label>Texto de la marca de agua</label><input type="text" id="cfg-marca-texto" value="${escapeHtml(c.marcaAgua||'')}"></div>
+      <button class="btn btn-gold" onclick="saveMarcaAgua()">${ic('i-check')} Guardar Marca de Agua</button>
+    </div>
     <div class="card"><div class="card-title">${ic('i-trash')} Permisos de Eliminación Definitiva</div>
       <p class="text-sm text-gray mb-2">La eliminación definitiva borra el pedido de ventas, caja, reportes y estadísticas sin dejar rastro. Solo el administrador puede ejecutarla.</p>
       <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-del-dom" ${c.permitirEliminarDomicilio?'checked':''} style="width:auto;"> Permitir eliminar domicilios</label>
@@ -1178,6 +1288,12 @@ function cargarLogo(e){
   reader.readAsDataURL(file);
 }
 function quitarLogo(){ const c=DB.get('config')||{}; c.logo=''; DB.set('config',c); toast('Logo quitado','info'); showPage('config'); }
+function saveMarcaAgua(){
+  const c=DB.get('config')||{};
+  c.marcaAgua=document.getElementById('cfg-marca-texto').value;
+  c.marcaAguaActiva=document.getElementById('cfg-marca-activa').checked;
+  DB.set('config',c); logAudit('Modificó marca de agua'); toast('Marca de agua guardada','success');
+}
 
 // ----- Respaldo de datos (exportar / importar) -----
 function exportarDatos(){
@@ -1390,7 +1506,7 @@ function buildModals(){
 
   <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
-  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Propina voluntaria (COP)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div><div class="form-group"><label>Método de pago</label><select id="cobro-metodo"><option value="efectivo">Efectivo</option><option value="nequi">Nequi</option><option value="daviplata">Daviplata</option><option value="tarjeta">Tarjeta</option></select></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
+  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar Mesa</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p><div class="form-group"><label>Método de pago</label><select id="cobro-metodo" onchange="actualizarTotalCobro()">${opcionesMetodo('efectivo')}</select></div><div class="form-grid-2"><div class="form-group"><label>Propina (del mesero)</label><input type="number" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div><div class="form-group" id="cobro-recargo-wrap" style="display:none;"><label>Recargo datáfono</label><input type="number" id="cobro-recargo" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div></div><div class="flex-between mb-2" style="font-size:16px;font-weight:700;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar y Cerrar</button></div></div></div>
 
   <div id="modal-empleado" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-emp-title">${ic('i-users')} Nuevo Empleado</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-empleado')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-emp-id"><div class="form-grid-2"><div class="form-group" style="grid-column:1/-1"><label>Nombre completo</label><input type="text" id="e-nombre"></div><div class="form-group"><label>Cédula</label><input type="text" id="e-cedula" inputmode="numeric"></div><div class="form-group"><label>Código (para marcar)</label><input type="text" id="e-codigo" inputmode="numeric" placeholder="Ej: 1234"></div></div><p class="text-xs text-gray mt-1">El empleado usará su cédula y este código en la pantalla de marcación de entrada/salida.</p></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-empleado')">Cancelar</button><button class="btn btn-gold" onclick="saveEmpleado()">Guardar</button></div></div></div>
 
@@ -1398,9 +1514,11 @@ function buildModals(){
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
+  <div id="modal-retiro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Retiro de Efectivo</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-retiro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2">Retiro oficial del efectivo (ej: los dueños retiran las ventas del día). No genera faltante: el sistema lo reconoce como salida autorizada.</p><div class="form-group"><label>Monto a retirar (COP)</label><input type="number" id="ret-monto" placeholder="0"></div><div class="form-group"><label>Motivo</label><input type="text" id="ret-motivo" placeholder="Ej: retiro ventas del día"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-retiro')">Cancelar</button><button class="btn btn-gold" onclick="saveRetiro()">${ic('i-check')} Registrar Retiro</button></div></div></div>
+
   <div id="modal-cliente" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-cli-title">${ic('i-delivery')} Nuevo Cliente</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cliente')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-cli-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="c-nombre"></div><div class="form-group"><label>Teléfono</label><input type="text" id="c-tel"></div><div class="form-group" style="grid-column:1/-1"><label>Dirección</label><input type="text" id="c-dir"></div><div class="form-group"><label>Barrio</label><input type="text" id="c-barrio"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cliente')">Cancelar</button><button class="btn btn-gold" onclick="saveCliente()">Guardar</button></div></div></div>
 
-  <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="cajero" selected>Cajero</option><option value="supervisor">Supervisor</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
+  <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="supervisor">Supervisor</option><option value="cajero" selected>Cajero</option><option value="mesero">Mesero</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
 
   <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Entremeses</option><option>Chowfan</option><option>Chopsuey</option><option>Lomein</option><option>Platos Combinados</option><option>Costillas</option><option>Pollo</option><option>Platos Personales</option><option>Combos Familiares</option><option>Bebidas</option><option>Promo del Mes</option><option>Adicionales</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
 }
@@ -1433,7 +1551,7 @@ function desbloquearPantalla(){
   else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
 }
 setInterval(updateClock,1000);
-setInterval(()=>{ if(STATE.page==='cocina'||STATE.page==='listos'){ showPage(STATE.page); } updateBadges(); },15000);
+setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos')){ showPage(STATE.page); } updateBadges(); },6000);
 let lastAct=Date.now();
 document.addEventListener('mousemove',()=>lastAct=Date.now());
 document.addEventListener('keydown',()=>lastAct=Date.now());
