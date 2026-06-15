@@ -110,7 +110,7 @@ function initData(){
 
 // ========================= STATE =========================
 const STATE = { user:null, page:'dashboard', order:[], descuento:0, descMot:'',
-  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, propina:0, recargo:0, orderObs:'', editandoVenta:null };
+  tipoPedido:'mesa', mesa:'', cliNombre:'', cliTel:'', cliDir:'', cliBarrio:'', valorDom:0, propina:0, recargo:0, metodoVenta:'efectivo', orderObs:'', editandoVenta:null };
 
 // ========================= AUTH =========================
 function doLogin(){
@@ -418,7 +418,7 @@ function addToOrder(id){
 function removeFromOrder(id){ STATE.order=STATE.order.filter(x=>x.id!==id); renderOrderPanel(); }
 function changeQty(id,d){ const i=STATE.order.find(x=>x.id===id); if(i){ i.qty=Math.max(1,i.qty+d); renderOrderPanel(); } }
 function setItemObs(id,v){ const i=STATE.order.find(x=>x.id===id); if(i) i.obs=v; }
-function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.propina=0; STATE.recargo=0; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null;
+function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.propina=0; STATE.recargo=0; STATE.metodoVenta='efectivo'; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null;
   const o=document.getElementById('order-obs'); if(o)o.value=''; renderCamposTipo(); renderOrderPanel(); }
 
 function renderOrderPanel(){
@@ -445,22 +445,34 @@ function renderOrderPanel(){
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
   const desc=STATE.descuento||0;
   const total=Math.max(0,subtotal+dom-desc);
+  const esCobroDirecto = STATE.tipoPedido!=='mesa' && STATE.user.rol!=='mesero';
+  const metodoSel = STATE.metodoVenta||'efectivo';
+  const propinaV = STATE.propina||0;
+  const recargoV = (metodoSel==='tarjeta')?(STATE.recargo||0):0;
+  const totalCobrar = total + propinaV + recargoV;
   sumEl.innerHTML=`
     <div class="flex-between text-sm"><span class="text-gray">Subtotal</span><span>${fmtMoney(subtotal)}</span></div>
     ${dom>0?`<div class="flex-between text-sm"><span class="text-gray">Domicilio</span><span>${fmtMoney(dom)}</span></div>`:''}
     ${desc>0?`<div class="flex-between text-sm text-red"><span>Descuento ${STATE.descMot?'('+escapeHtml(STATE.descMot)+')':''}</span><span>-${fmtMoney(desc)}</span></div>`:''}
-    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>Total</span><span class="text-gold">${fmtMoney(total)}</span></div>
+    ${esCobroDirecto&&propinaV>0?`<div class="flex-between text-sm"><span class="text-gray">Propina</span><span>${fmtMoney(propinaV)}</span></div>`:''}
+    ${esCobroDirecto&&recargoV>0?`<div class="flex-between text-sm"><span class="text-gray">Recargo datáfono</span><span>${fmtMoney(recargoV)}</span></div>`:''}
+    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>${esCobroDirecto?'Total a cobrar':'Total'}</span><span class="text-gold">${fmtMoney(esCobroDirecto?totalCobrar:total)}</span></div>
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
-      ${STATE.tipoPedido==='mesa'?'':(STATE.user.rol==='mesero'?'':`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;">${opcionesMetodo('efectivo')}</select>`)}
+      ${esCobroDirecto?`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;" onchange="STATE.metodoVenta=this.value;renderOrderPanel()">${opcionesMetodo(metodoSel)}</select>`:''}
     </div>
+    ${esCobroDirecto?`
+      <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
+        <input type="number" class="mini-input" style="flex:1;min-width:100px;" placeholder="Propina (mesero)" value="${propinaV||''}" oninput="STATE.propina=parseFloat(this.value)||0;renderOrderPanel()">
+        ${metodoSel==='tarjeta'?`<input type="number" class="mini-input" style="flex:1;min-width:100px;" placeholder="Recargo datáfono" value="${recargoV||''}" oninput="STATE.recargo=parseFloat(this.value)||0;renderOrderPanel()">`:''}
+      </div>`:''}
     ${STATE.tipoPedido==='mesa'
       ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
          <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">La mesa queda abierta. Se cobra al final desde Pedidos.</p>`
       : (STATE.user.rol==='mesero'
         ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarPedidoAbierto()" style="font-size:14px;padding:12px;">${ic('i-check')} Enviar a Cocina (sin cobrar)</button>
            <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">El pedido queda abierto. El cajero lo cobra.</p>`
-        : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(total)}</button>`)}`;
+        : `<button class="btn btn-gold btn-block mt-1" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(totalCobrar)}</button>`)}`;
 }
 function applyDescuento(){
   const tipo=document.getElementById('desc-tipo').value, val=parseFloat(document.getElementById('desc-valor').value)||0;
@@ -539,7 +551,7 @@ function cobrarVenta(){
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
   if(STATE.tipoPedido==='domicilio' && (!STATE.cliNombre||!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio requiere nombre, teléfono y dirección','error'); return; }
   if(STATE.tipoPedido==='llevar' && !STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
-  const metodo=document.getElementById('pay-method')?.value||'efectivo';
+  const metodo=STATE.metodoVenta||document.getElementById('pay-method')?.value||'efectivo';
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
   // Venta real = ingreso del negocio (NO incluye domicilio)
