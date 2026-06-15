@@ -128,6 +128,10 @@ function doLogin(){
   document.getElementById('user-name-sb').textContent=user.nombre;
   document.getElementById('user-role-sb').textContent=user.rol.charAt(0).toUpperCase()+user.rol.slice(1);
   document.getElementById('user-avatar-sb').textContent=user.nombre.charAt(0).toUpperCase();
+  // Logo en el sidebar
+  const logoSb=(DB.get('config')||{}).logo||window.LOGO_DEFAULT;
+  if(logoSb){ const img=document.getElementById('sidebar-logo-img'); const fb=document.getElementById('sidebar-logo-fallback');
+    if(img){ img.src=logoSb; img.style.display='block'; } if(fb) fb.style.display='none'; }
   buildSidebar();
   logAudit('Inicio de sesión');
   showPage(user.rol==='cocina'?'cocina':'dashboard');
@@ -182,28 +186,7 @@ function marcar(tipo){
   if(!ced||!cod){ asisMsg('Ingrese cédula y código.',false); return; }
   const emp=(DB.get('empleados')||[]).find(e=>e.cedula===ced && e.codigo===cod && e.activo);
   if(!emp){ asisMsg('Cédula o código incorrectos.',false); return; }
-
-  const cfg=DB.get('config')||{};
-  if(cfg.gpsActivo){
-    if(!navigator.geolocation){ asisMsg('Este dispositivo no permite ubicación. Avise al administrador.',false); return; }
-    asisMsg('Verificando que esté en el restaurante...',true);
-    navigator.geolocation.getCurrentPosition(
-      pos=>{
-        const dist=distanciaMetros(pos.coords.latitude,pos.coords.longitude,cfg.gpsLat,cfg.gpsLng);
-        if(dist<=(cfg.gpsRadio||100)){
-          registrarMarcacion(emp,tipo);
-        } else {
-          asisMsg(`No puede marcar: está a ${Math.round(dist)} m del restaurante. Debe estar en el lugar de trabajo.`,false);
-        }
-      },
-      err=>{
-        asisMsg('Debe permitir el acceso a la ubicación para marcar. Active el GPS e intente de nuevo.',false);
-      },
-      {enableHighAccuracy:true, timeout:10000, maximumAge:0}
-    );
-  } else {
-    registrarMarcacion(emp,tipo);
-  }
+  registrarMarcacion(emp,tipo);
 }
 function registrarMarcacion(emp,tipo){
   const marcs=DB.get('marcaciones')||[];
@@ -216,8 +199,8 @@ function registrarMarcacion(emp,tipo){
   asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
-  // Por seguridad, cerrar sola la sesión después de cada marcación (3 segundos para ver el mensaje)
-  setTimeout(()=>{ salirAsistencia(); }, 3000);
+  // La pantalla queda abierta para el siguiente empleado. Se cierra con el botón "Salir".
+  setTimeout(()=>{ const el=document.getElementById('asis-msg'); if(el) el.style.display='none'; }, 6000);
 }
 
 // ========================= SIDEBAR =========================
@@ -1154,20 +1137,6 @@ function config(){
       <div class="card-title">${ic('i-rider')} Domiciliarios</div>
       <div style="display:flex;gap:8px;margin-bottom:10px;"><input type="text" id="new-dom" placeholder="Nombre del domiciliario"><button class="btn btn-primary" onclick="addDomiciliario()">${ic('i-plus')}</button></div>
       ${ds.map(d=>`<div class="flex-between" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(d.nombre)}</span><button class="btn btn-danger btn-sm" onclick="delDomiciliario('${d.id}')">${ic('i-trash')}</button></div>`).join('')}
-    </div>
-    <div class="card" style="grid-column:1/-1"><div class="card-title">${ic('i-pin')} Control de Ubicación (GPS) para Asistencia</div>
-      <p class="text-sm text-gray mb-2">Si lo activas, los empleados solo podrán marcar entrada/salida cuando estén físicamente en el restaurante. Necesitan permitir el acceso a la ubicación en su celular.</p>
-      <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-gps-activo" ${c.gpsActivo?'checked':''} style="width:auto;"> <strong>Activar control por GPS</strong></label>
-      <div class="form-grid-2 mt-1">
-        <div class="form-group"><label>Latitud del restaurante</label><input type="text" id="cfg-gps-lat" value="${c.gpsLat||''}" placeholder="Ej: 7.119349"></div>
-        <div class="form-group"><label>Longitud del restaurante</label><input type="text" id="cfg-gps-lng" value="${c.gpsLng||''}" placeholder="Ej: -73.122741"></div>
-      </div>
-      <div class="form-group"><label>Radio permitido (metros)</label><input type="number" id="cfg-gps-radio" value="${c.gpsRadio||100}" min="20" max="1000"><p class="text-xs text-gray mt-1">Distancia máxima desde el local para poder marcar. Recomendado: 80–150 m.</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-ghost" onclick="usarMiUbicacion()">${ic('i-pin')} Usar mi ubicación actual</button>
-        <button class="btn btn-gold" onclick="saveGps()">${ic('i-check')} Guardar GPS</button>
-      </div>
-      <p class="text-xs text-gray mt-2">Consejo: párate dentro del restaurante con tu celular y presiona "Usar mi ubicación actual" para llenar las coordenadas automáticamente.</p>
     </div>
     <div class="card" style="grid-column:1/-1"><div class="card-title">${ic('i-history')} Respaldo de Datos</div>
       <p class="text-sm text-gray mb-2">Descarga una copia de seguridad de toda la información (ventas, caja, empleados, asistencias, configuración). Guárdala en un lugar seguro cada cierto tiempo. Si algo se daña, puedes restaurarla.</p>

@@ -297,6 +297,13 @@ body.tactil .order-item-row .btn-icon { width: 32px !important; height: 32px !im
     <div class="mt-2" style="text-align:center;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-recovery')">¿Olvidó su contraseña?</button>
     </div>
+    <div style="text-align:center;margin-top:22px;padding-top:14px;border-top:1px solid rgba(212,175,55,0.12);">
+      <p style="font-size:9px;letter-spacing:1.5px;color:var(--gray2);text-transform:uppercase;line-height:1.6;">
+        Desarrollado por<br>
+        <strong style="color:var(--gold-dark);letter-spacing:2px;">Wallace Company System</strong><br>
+        <span style="color:var(--gray3);">Ing. Roldán Aldana CCIA</span>
+      </p>
+    </div>
   </div>
 
   <!-- PANTALLA DE MARCACIÓN -->
@@ -329,7 +336,8 @@ body.tactil .order-item-row .btn-icon { width: 32px !important; height: 32px !im
 <div id="app" style="display:flex;">
   <div id="sidebar">
     <div class="sidebar-logo">
-      <svg class="ic crest"><use href="#i-crest"/></svg>
+      <img id="sidebar-logo-img" src="" alt="" style="max-height:48px;display:none;margin:0 auto 4px;">
+      <svg class="ic crest" id="sidebar-logo-fallback"><use href="#i-crest"/></svg>
       <h2>Portal Imperial</h2>
       <span>POS System</span>
     </div>
