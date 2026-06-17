@@ -618,16 +618,12 @@ function cobrarVenta(){
 // ========================= IMPRESIÓN =========================
 // Impresión robusta: en móvil abre ventana nueva (más confiable que window.print directo)
 function imprimirHTML(html){
-  // Método directo y confiable: funciona en computador, celular y tablet.
-  // (Antes se abría una ventana nueva en móvil, pero los navegadores la bloqueaban y no imprimía.)
   const pa=document.getElementById('print-area');
   if(!pa) return;
   pa.innerHTML=html;
   pa.style.display='block';
-  setTimeout(()=>{
-    window.print();
-    setTimeout(()=>{ pa.style.display='none'; }, 200);
-  }, 150);
+  window.print();
+  pa.style.display='none';
 }
 function printFactura(v){
   const cfg=DB.get('config')||{};
