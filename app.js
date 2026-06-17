@@ -470,34 +470,22 @@ function renderOrderPanel(){
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
   const desc=STATE.descuento||0;
   const total=Math.max(0,subtotal+dom-desc);
-  const esCobroDirecto = STATE.tipoPedido!=='mesa' && STATE.user.rol!=='mesero';
-  const metodoSel = STATE.metodoVenta||'efectivo';
-  const propinaV = STATE.propina||0;
-  const recargoV = (metodoSel==='tarjeta')?(STATE.recargo||0):0;
-  const totalCobrar = total + propinaV + recargoV;
   sumEl.innerHTML=`
     <div class="flex-between text-sm"><span class="text-gray">Subtotal</span><span>${fmtMoney(subtotal)}</span></div>
     ${dom>0?`<div class="flex-between text-sm"><span class="text-gray">Domicilio</span><span>${fmtMoney(dom)}</span></div>`:''}
     ${desc>0?`<div class="flex-between text-sm text-red"><span>Descuento ${STATE.descMot?'('+escapeHtml(STATE.descMot)+')':''}</span><span>-${fmtMoney(desc)}</span></div>`:''}
-    ${esCobroDirecto&&propinaV>0?`<div class="flex-between text-sm"><span class="text-gray">Propina</span><span>${fmtMoney(propinaV)}</span></div>`:''}
-    ${esCobroDirecto&&recargoV>0?`<div class="flex-between text-sm"><span class="text-gray">Recargo datáfono</span><span>${fmtMoney(recargoV)}</span></div>`:''}
-    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>${esCobroDirecto?'Total a cobrar':'Total'}</span><span class="text-gold" id="venta-total-disp">${fmtMoney(esCobroDirecto?totalCobrar:total)}</span></div>
+    <div class="flex-between mt-1" style="font-size:17px;font-weight:700;"><span>Total</span><span class="text-gold" id="venta-total-disp">${fmtMoney(total)}</span></div>
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
-      ${esCobroDirecto?`<select id="pay-method" class="mini-input" style="flex:1;min-width:110px;width:auto;" onchange="STATE.metodoVenta=this.value;renderOrderPanel()">${opcionesMetodo(metodoSel)}</select>`:''}
     </div>
-    ${esCobroDirecto?`
-      <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
-        <input type="number" inputmode="numeric" class="mini-input" style="flex:1;min-width:100px;" placeholder="Propina (mesero)" value="${propinaV||''}" oninput="STATE.propina=parseFloat(this.value)||0;actualizarTotalVenta()">
-        ${metodoSel==='tarjeta'?`<input type="number" inputmode="numeric" class="mini-input" style="flex:1;min-width:100px;" placeholder="Recargo datáfono" value="${recargoV||''}" oninput="STATE.recargo=parseFloat(this.value)||0;actualizarTotalVenta()">`:''}
-      </div>`:''}
     ${STATE.tipoPedido==='mesa'
       ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
          <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">La mesa queda abierta. Se cobra al final desde Pedidos.</p>`
       : (STATE.user.rol==='mesero'
         ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarPedidoAbierto()" style="font-size:14px;padding:12px;">${ic('i-check')} Enviar a Cocina (sin cobrar)</button>
            <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">El pedido queda abierto. El cajero lo cobra.</p>`
-        : `<button class="btn btn-gold btn-block mt-1" id="btn-cobrar-venta" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Cobrar '+fmtMoney(totalCobrar)}</button>`)}`;
+        : `<button class="btn btn-gold btn-block mt-1" id="btn-cobrar-venta" onclick="cobrarVenta()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Guardar Cambios':'Enviar y Cobrar'}</button>
+           <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">Se enviará a cocina y abrirá el cobro (puede dividir el pago).</p>`)}`;
 }
 function actualizarTotalVenta(){
   // Actualiza solo el total mostrado y el botón, SIN redibujar (para no perder el foco al escribir)
@@ -588,51 +576,43 @@ function cobrarVenta(){
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
   if(STATE.tipoPedido==='domicilio' && (!STATE.cliNombre||!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio requiere nombre, teléfono y dirección','error'); return; }
   if(STATE.tipoPedido==='llevar' && !STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
-  const metodo=STATE.metodoVenta||document.getElementById('pay-method')?.value||'efectivo';
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
   const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
-  // Venta real = ingreso del negocio (NO incluye domicilio)
   const ventaReal=Math.max(0,subtotal-(STATE.descuento||0));
-  const propina=STATE.propina||0;
-  const recargo=(metodo==='tarjeta')?(STATE.recargo||0):0;
-  const totalCobrado=ventaReal+dom+propina+recargo; // lo que paga el cliente
   const vs=DB.get('ventas')||[];
 
   if(STATE.editandoVenta){
     const v=vs.find(x=>x.id===STATE.editandoVenta.id);
     if(v){ v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0;
-      v.total=ventaReal; v.propina=propina; v.recargo=recargo; v.totalCobrado=totalCobrado; v.metodo=metodo; v.obs=STATE.orderObs;
+      v.total=ventaReal; v.obs=STATE.orderObs;
       v.modificadoPor=STATE.user.nombre; v.modificadoEn=now(); DB.set('ventas',vs);
       logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado','success'); }
     clearOrder(); showPage('pedidos'); return;
   }
 
   const esDomicilio = STATE.tipoPedido==='domicilio';
-  const factura = esDomicilio ? '' : nextFactura();
-  const requiereVerif = (metodo==='banco'||metodo==='llave');
-  const venta={ id:uid(),factura,ordenCocina: esDomicilio?null:nextOrden(),fecha:now(),tipo:STATE.tipoPedido,
+  // Crear el pedido ABIERTO (aún sin cobrar) y enviarlo a cocina
+  const venta={ id:uid(),factura:'',ordenCocina: esDomicilio?null:nextOrden(),fecha:now(),tipo:STATE.tipoPedido,
     mesa:STATE.tipoPedido==='mesa'?STATE.mesa:'', cliNombre:STATE.cliNombre,cliTel:STATE.cliTel,cliDir:STATE.cliDir,cliBarrio:STATE.cliBarrio,
     valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
-    total:ventaReal, ventaReal, propina, recargo, totalCobrado,
-    metodo, pagos:{[metodo]:totalCobrado}, estado:requiereVerif?'por_verificar':'pagada', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
-    obs:STATE.orderObs, cajero:STATE.user?.nombre, cobradoPor:STATE.user?.nombre, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
+    total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
+    metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
+    obs:STATE.orderObs, cajero:STATE.user?.nombre, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); DB.set('ventas',vs);
 
-  if(STATE.tipoPedido==='domicilio'){
+  if(esDomicilio){
     const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
     if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
     DB.set('clientes',cls);
   }
-  logAudit('Creó venta',`${factura||STATE.cliNombre} - venta ${fmtMoney(ventaReal)}${requiereVerif?' (por verificar)':''}`);
+  logAudit('Creó venta',`${STATE.cliNombre||venta.ordenCocina} - venta ${fmtMoney(ventaReal)}`);
   notifyKitchen();
-  clearOrder();
   printTicketCocina(venta);
-  if(requiereVerif){
-    toast('Pedido enviado a cocina. Pago por Banco/Llave PENDIENTE de verificar en Pedidos.','info');
-  } else {
-    toast(esDomicilio?'Domicilio registrado':`Venta registrada: ${factura}`,'success');
-    setTimeout(()=>printFactura(venta),400);
-  }
+  const idNuevo=venta.id;
+  clearOrder();
+  // Abrir el modal de cobro con pago dividido (igual que mesa)
+  showPage('pedidos');
+  setTimeout(()=>abrirCobroMesa(idNuevo), 200);
 }
 
 // ========================= IMPRESIÓN =========================
@@ -956,13 +936,17 @@ function setEstadoCocina(id,e){
 // ========================= CAJA =========================
 function caja(){
   const c=DB.get('caja_actual'); const cierres=DB.get('cierres')||[];
+  const puedeAbrir = ['admin','cajero','supervisor'].includes(STATE.user.rol);
   if(!c){
     return `<div class="card" style="max-width:480px;margin:0 auto;text-align:center;padding:36px;">
-      <div style="font-size:48px;color:var(--gold);margin-bottom:12px;">${ic('i-cash')}</div>
+      <div style="font-size:48px;color:var(--red-light);margin-bottom:12px;">${ic('i-lock')}</div>
       <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:10px;">Caja Cerrada</h2>
-      <p class="text-gray mb-2">Abra la caja para comenzar a operar.</p>
-      <button class="btn btn-gold" onclick="openModal('modal-caja')" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button></div>
-      ${cierres.length>0?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,15).map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
+      ${puedeAbrir
+        ? `<p class="text-gray mb-2">La caja está cerrada. Ábrala con la base inicial para comenzar a operar.</p>
+           <button class="btn btn-gold" onclick="openModal('modal-caja')" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button>`
+        : `<p class="text-gray mb-2">La caja está cerrada. Solo el cajero, administrador o supervisor pueden abrirla.</p>`}
+      </div>
+      ${cierres.length>0&&puedeAbrir?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,15).map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
@@ -1463,54 +1447,56 @@ let asisPeriodo='dia';
 function setAsisPeriodo(p){ asisPeriodo=p; showPage('asistencia'); }
 function tiempos(){
   const vs=DB.get('ventas')||[];
-  // Pedidos que tienen hora de entrada y hora de listo (jornada completa de cocina)
-  const conTiempo=vs.filter(v=>v.fecha && v.horaListo).map(v=>({
-    tipo:v.tipo, min:(new Date(v.horaListo)-new Date(v.fecha))/60000, fecha:v.fecha
-  })).filter(x=>x.min>0 && x.min<240); // descartar tiempos absurdos (>4h)
+  // Pedidos con tiempo medido (entrada a cocina -> listo), ordenados del más reciente al más viejo
+  const conTiempo=vs.filter(v=>v.fecha && v.horaListo)
+    .map(v=>({ tipo:v.tipo, min:(new Date(v.horaListo)-new Date(v.fecha))/60000, fecha:v.horaListo, ref:refCocina(v) }))
+    .filter(x=>x.min>0 && x.min<240)
+    .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
 
   const prom = arr => arr.length? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
-  const todos=conTiempo.map(x=>x.min);
-  const promGeneral=prom(todos);
-  // Por tipo
+  // ESTIMADO EN VIVO: promedio de los últimos 5 pedidos listos (refleja el ritmo actual)
+  const ultimos5=conTiempo.slice(0,5).map(x=>x.min);
+  const ultimos3=conTiempo.slice(0,3).map(x=>x.min);
+  const promVivo = ultimos5.length>=3 ? prom(ultimos5) : (ultimos3.length>0? prom(ultimos3) : 0);
+  const promGeneral=prom(conTiempo.map(x=>x.min));
+
+  // Por tipo (últimos 5 de cada tipo)
   const porTipo={};
-  ['mesa','llevar','domicilio'].forEach(t=>{ const a=conTiempo.filter(x=>x.tipo===t).map(x=>x.min); porTipo[t]={prom:prom(a),n:a.length}; });
-  // Últimos 7 días para un estimado más "actual"
-  const ini=new Date(ahoraMs()-7*864e5).toISOString();
-  const recientes=conTiempo.filter(x=>x.fecha>=ini).map(x=>x.min);
-  const promReciente=prom(recientes);
-  // Estimado para dar al cliente: usa el reciente si hay datos, si no el general; redondeado hacia arriba a 5 min
-  const base = promReciente||promGeneral;
+  ['mesa','llevar','domicilio'].forEach(t=>{ const a=conTiempo.filter(x=>x.tipo===t).slice(0,5).map(x=>x.min); porTipo[t]={prom:prom(a),n:a.length}; });
+
+  // Estimado redondeado a 5 min hacia arriba, con margen
+  const base=promVivo||promGeneral;
   const estimado = base? Math.ceil(base/5)*5 : 0;
   const estimadoMax = estimado? estimado+10 : 0;
-
-  // Pedidos en cocina ahora mismo (para contexto)
   const enCocinaAhora=vs.filter(v=>v.estado!=='anulada'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='listo'&&v.estadoCocina!=='entregado').length;
-
   const fmtMin = m => m>0? (m>=60? Math.floor(m/60)+'h '+Math.round(m%60)+'min' : Math.round(m)+' min') : '—';
 
   return `
   <div class="card" style="text-align:center;background:linear-gradient(145deg,rgba(212,175,55,0.12),var(--dark));">
     <div class="card-title" style="justify-content:center;">${ic('i-clock')} Tiempo estimado para el cliente</div>
     ${estimado? `<div style="font-size:42px;font-weight:800;color:var(--gold);line-height:1.1;margin:8px 0;">${estimado} – ${estimadoMax} min</div>
-      <p class="text-sm text-gray">Dile al cliente que su pedido estará aproximadamente en este tiempo.</p>
-      ${enCocinaAhora>0?`<p class="text-xs" style="color:var(--orange);margin-top:6px;">${ic('i-warning')} Hay ${enCocinaAhora} pedido(s) en cocina ahora. Si hay muchos, el tiempo puede ser mayor.</p>`:''}`
-      : `<p class="text-gray mt-2">Aún no hay suficientes datos. A medida que la cocina marque pedidos como "listo", aquí aparecerá el tiempo promedio real.</p>`}
+      <p class="text-sm text-gray">Basado en los últimos ${Math.min(5,conTiempo.length)} pedidos preparados. Dile al cliente este tiempo aproximado.</p>
+      ${enCocinaAhora>=4?`<p class="text-xs" style="color:var(--orange);margin-top:6px;">${ic('i-warning')} Hay ${enCocinaAhora} pedidos en cocina ahora. El tiempo puede ser un poco mayor.</p>`:''}`
+      : `<p class="text-gray mt-2">Aún no hay suficientes datos. Necesita al menos 3 pedidos marcados como "listo" en cocina para calcular el promedio. Llevan ${conTiempo.length}.</p>`}
   </div>
 
   <div class="stats-grid">
-    <div class="stat-card gold"><div class="stat-label">Promedio general</div><div class="stat-value">${fmtMin(promGeneral)}</div><div class="stat-sub">${todos.length} pedidos medidos</div></div>
-    <div class="stat-card green"><div class="stat-label">Promedio últimos 7 días</div><div class="stat-value">${fmtMin(promReciente)}</div><div class="stat-sub">${recientes.length} pedidos</div></div>
-    <div class="stat-card blue"><div class="stat-label">En cocina ahora</div><div class="stat-value">${enCocinaAhora}</div><div class="stat-sub">pedidos preparándose</div></div>
+    <div class="stat-card gold"><div class="stat-label">Promedio en vivo</div><div class="stat-value">${fmtMin(promVivo)}</div><div class="stat-sub">últimos ${Math.min(5,conTiempo.length)} pedidos</div></div>
+    <div class="stat-card green"><div class="stat-label">Promedio histórico</div><div class="stat-value">${fmtMin(promGeneral)}</div><div class="stat-sub">${conTiempo.length} pedidos medidos</div></div>
+    <div class="stat-card blue"><div class="stat-label">En cocina ahora</div><div class="stat-value">${enCocinaAhora}</div><div class="stat-sub">preparándose</div></div>
   </div>
 
-  <div class="card"><div class="card-title">${ic('i-report')} Tiempo promedio por tipo de pedido</div>
-    <div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Tiempo promedio</th><th>Pedidos medidos</th></tr></thead><tbody>
+  <div class="card"><div class="card-title">${ic('i-report')} Tiempo promedio por tipo (últimos pedidos)</div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Tiempo promedio</th><th>Medidos</th></tr></thead><tbody>
       <tr><td>${ic('i-table')} Mesa</td><td class="text-gold font-bold">${fmtMin(porTipo.mesa.prom)}</td><td>${porTipo.mesa.n}</td></tr>
       <tr><td>${ic('i-bag')} Para llevar</td><td class="text-gold font-bold">${fmtMin(porTipo.llevar.prom)}</td><td>${porTipo.llevar.n}</td></tr>
       <tr><td>${ic('i-delivery')} Domicilio</td><td class="text-gold font-bold">${fmtMin(porTipo.domicilio.prom)}</td><td>${porTipo.domicilio.n}</td></tr>
     </tbody></table></div>
-    <p class="text-xs text-gray mt-2">El tiempo se mide desde que entra el pedido a cocina hasta que se marca como "Listo". Para domicilio no incluye el tiempo de transporte.</p>
-  </div>`;
+  </div>
+  ${conTiempo.length>0?`<div class="card"><div class="card-title">${ic('i-clock')} Últimos pedidos preparados</div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido</th><th>Tipo</th><th>Tiempo</th></tr></thead><tbody>
+    ${conTiempo.slice(0,8).map(x=>`<tr><td>${x.ref}</td><td>${tipoLabel(x.tipo)}</td><td class="font-bold ${x.min>25?'text-red':x.min>15?'text-gold':'text-green'}">${fmtMin(x.min)}</td></tr>`).join('')}
+    </tbody></table></div></div>`:''}`;
 }
 function asistencia(){
   const emps=DB.get('empleados')||[];
@@ -1733,7 +1719,7 @@ function desbloquearPantalla(){
   else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
 }
 setInterval(updateClock,1000);
-setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos')){ showPage(STATE.page); } updateBadges(); },6000);
+setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos'||STATE.page==='tiempos')){ showPage(STATE.page); } updateBadges(); },6000);
 let lastAct=Date.now();
 document.addEventListener('mousemove',()=>lastAct=Date.now());
 document.addEventListener('keydown',()=>lastAct=Date.now());
@@ -1819,6 +1805,18 @@ function listenRealtime(){
   FIREBASE_KEYS.forEach(k=>{
     fbDB.ref('data/'+k).on('value', snap=>{
       const v = snap.val();
+      // caja_actual puede ser null de forma legítima (caja cerrada): ese cambio SÍ debe propagarse
+      // para que TODOS los dispositivos vean la caja cerrada al instante.
+      if(k==='caja_actual'){
+        CACHE[k] = (v===undefined? null : v);
+        try { localStorage.setItem('pi_'+k, JSON.stringify(CACHE[k])); } catch(e){}
+        if(STATE.user && !ESCRIBIENDO){
+          if(STATE.page!=='ventas'){ try{ showPage(STATE.page); }catch(e){} }
+          else { try{ showPage('ventas'); }catch(e){} } // refrescar ventas para mostrar/ocultar bloqueo de caja
+          updateBadges();
+        }
+        return;
+      }
       if(v===null || v===undefined) return;
       CACHE[k] = v;
       try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
