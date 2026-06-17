@@ -618,24 +618,16 @@ function cobrarVenta(){
 // ========================= IMPRESIÓN =========================
 // Impresión robusta: en móvil abre ventana nueva (más confiable que window.print directo)
 function imprimirHTML(html){
-  const esMovil = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-  if(esMovil){
-    const w=window.open('','_blank');
-    if(!w){ // si el navegador bloquea ventanas, usar el método clásico
-      const pa=document.getElementById('print-area'); pa.innerHTML=html; pa.style.display='block'; window.print(); pa.style.display='none'; return;
-    }
-    w.document.write(`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>.</title><style>
-      @page{ size:72mm auto; margin:0; }
-      *{ box-sizing:border-box; }
-      html,body{ margin:0!important; padding:0!important; }
-      body{ padding:2mm 3mm; font-family:'Courier New',monospace; font-size:16px; line-height:1.4; color:#000; width:72mm; }
-      img{ max-width:100%; }
-      div:last-child{ margin-bottom:0!important; }
-    </style></head><body>${html}<script>window.onload=function(){setTimeout(function(){window.print();},350);};window.onafterprint=function(){window.close();};<\/script></body></html>`);
-    w.document.close();
-  } else {
-    const pa=document.getElementById('print-area'); pa.innerHTML=html; pa.style.display='block'; window.print(); pa.style.display='none';
-  }
+  // Método directo y confiable: funciona en computador, celular y tablet.
+  // (Antes se abría una ventana nueva en móvil, pero los navegadores la bloqueaban y no imprimía.)
+  const pa=document.getElementById('print-area');
+  if(!pa) return;
+  pa.innerHTML=html;
+  pa.style.display='block';
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=>{ pa.style.display='none'; }, 200);
+  }, 150);
 }
 function printFactura(v){
   const cfg=DB.get('config')||{};
@@ -680,9 +672,9 @@ function printFactura(v){
     </div>
     <div style="text-align:center;font-size:14px;font-weight:bold;margin-top:5px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
     <div style="text-align:center;margin-top:12px;font-size:15px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
-    <div style="text-align:center;font-size:12px;color:#555;margin-top:4px;">Lo esperamos pronto</div>
+    <div style="text-align:center;font-size:14px;color:#333;margin-top:4px;font-weight:bold;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
-    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:10px;color:#777;margin-top:10px;letter-spacing:1px;border-top:1px dotted #ccc;padding-top:6px;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
+    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:12px;color:#444;margin-top:10px;letter-spacing:1px;border-top:1px dotted #999;padding-top:8px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
   </div>`;
   imprimirHTML(html);
 }
