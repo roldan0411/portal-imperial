@@ -624,7 +624,12 @@ function imprimirHTML(html){
     if(!w){ // si el navegador bloquea ventanas, usar el método clásico
       const pa=document.getElementById('print-area'); pa.innerHTML=html; pa.style.display='block'; window.print(); pa.style.display='none'; return;
     }
-    w.document.write(`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Imprimir</title><style>@media print{@page{margin:5mm;}}body{margin:0;padding:8px;font-family:'Courier New',monospace;}</style></head><body>${html}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+    w.document.write(`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Imprimir</title><style>
+      @page{ size:80mm auto; margin:3mm; }
+      html,body{ margin:0; padding:0; }
+      body{ padding:4mm; font-family:'Courier New',monospace; font-size:15px; line-height:1.45; color:#000; width:72mm; margin:0 auto; }
+      img{ max-width:100%; }
+    </style></head><body>${html}<script>window.onload=function(){setTimeout(function(){window.print();},350);};window.onafterprint=function(){window.close();};<\/script></body></html>`);
     w.document.close();
   } else {
     const pa=document.getElementById('print-area'); pa.innerHTML=html; pa.style.display='block'; window.print(); pa.style.display='none';
@@ -637,17 +642,17 @@ function printFactura(v){
   const html=`
   <div style="font-family:'Courier New',monospace;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
-      ${cfg.logo?`<img src="${cfg.logo}" style="max-height:70px;max-width:180px;margin-bottom:6px;">`:''}
-      <div style="font-size:20px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
-      <div style="font-size:11px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
-      <div style="font-size:10px;margin-top:6px;line-height:1.5;">
-        NIT: ${cfg.nit||''}<br>${escapeHtml(cfg.dir||'')}<br>Tel: ${cfg.tel||''}
+      ${cfg.logo?`<img src="${cfg.logo}" style="max-height:90px;max-width:200px;margin-bottom:6px;">`:''}
+      <div style="font-size:24px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
+      <div style="font-size:13px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
+      <div style="font-size:12px;margin-top:6px;line-height:1.5;">
+        ${cfg.nit?'NIT: '+cfg.nit+'<br>':''}${escapeHtml(cfg.dir||'')}<br>Tel: ${cfg.tel||''}
       </div>
     </div>
-    <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;text-align:center;margin:4px 0;">
-      <div style="font-size:14px;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA '+v.factura}</div>
+    <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:7px 0;text-align:center;margin:4px 0;">
+      <div style="font-size:17px;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA '+v.factura}</div>
     </div>
-    <div style="font-size:10px;line-height:1.6;margin:6px 0;">
+    <div style="font-size:12px;line-height:1.7;margin:6px 0;">
       <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${fmtDate(v.fechaCobro||v.fecha)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Tipo:</span><span>${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}</span></div>
       ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
@@ -656,26 +661,26 @@ function printFactura(v){
       <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.cajero||'')}</span></div>
     </div>
     <div style="border-top:1px dashed #000;padding-top:4px;">
-      <div style="display:flex;justify-content:space-between;font-size:10px;font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:4px;">
+      <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:4px;">
         <span style="flex:1;">CANT / PRODUCTO</span><span>VALOR</span>
       </div>
-      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span style="flex:1;">${i.qty} x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
+      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;"><span style="flex:1;">${i.qty} x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
     </div>
-    <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:11px;">
+    <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:13px;">
       <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
       ${v.descuento>0?`<div style="display:flex;justify-content:space-between;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
       ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
       ${v.propina>0?`<div style="display:flex;justify-content:space-between;"><span>Propina</span><span>${fmtMoney(v.propina)}</span></div>`:''}
       ${v.recargo>0?`<div style="display:flex;justify-content:space-between;"><span>Recargo datáfono</span><span>${fmtMoney(v.recargo)}</span></div>`:''}
     </div>
-    <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:8px 0;display:flex;justify-content:space-between;font-size:16px;font-weight:bold;">
+    <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:9px 0;display:flex;justify-content:space-between;font-size:20px;font-weight:bold;">
       <span>TOTAL</span><span>${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
     </div>
-    <div style="text-align:center;font-size:10px;margin-top:4px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
-    <div style="text-align:center;margin-top:14px;font-size:11px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
-    <div style="text-align:center;font-size:9px;color:#555;margin-top:4px;">Lo esperamos pronto</div>
+    <div style="text-align:center;font-size:12px;margin-top:5px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
+    <div style="text-align:center;margin-top:14px;font-size:13px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
+    <div style="text-align:center;font-size:11px;color:#555;margin-top:4px;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
-    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:8px;color:#999;margin-top:10px;letter-spacing:1px;border-top:1px dotted #ccc;padding-top:6px;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
+    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:9px;color:#999;margin-top:10px;letter-spacing:1px;border-top:1px dotted #ccc;padding-top:6px;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
   </div>`;
   imprimirHTML(html);
 }

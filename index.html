@@ -197,9 +197,10 @@ select option { background: var(--dark2); }
 @media print {
   body * { visibility: hidden; }
   #print-area, #print-area * { visibility: visible; }
-  #print-area { position: absolute; top: 0; left: 0; width: 80mm; display: block !important; }
+  #print-area { position: absolute; top: 0; left: 0; width: 100%; display: block !important; font-size: 15px; padding: 4mm; }
+  @page { size: 80mm auto; margin: 3mm; }
 }
-#print-area { display: none; font-family: 'Courier New', monospace; font-size: 12px; color: #000; background: #fff; padding: 10px; width: 300px; }
+#print-area { display: none; font-family: 'Courier New', monospace; font-size: 14px; color: #000; background: #fff; padding: 10px; width: 300px; }
 
 /* MODO TÁCTIL: botones y elementos más grandes */
 body.tactil .btn { padding: 14px 22px; font-size: 15px; }
