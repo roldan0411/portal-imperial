@@ -1,0 +1,66 @@
+========================================
+  PORTAL IMPERIAL - VERSION CAJA (LOCAL)
+========================================
+
+Esta version es SOLO para el computador de la caja que tiene
+la impresora. Sirve para que la impresion con QZ Tray funcione
+sin problemas de seguridad.
+
+Los celulares y tablets siguen usando la pagina normal de internet
+(https://portal-imperial.onrender.com). Esta version local NO los
+reemplaza, es solo para la caja.
+
+
+--------------------------------------------------
+PASO 1: INSTALAR PYTHON (solo la primera vez)
+--------------------------------------------------
+
+1. Entra a: https://www.python.org/downloads/
+2. Descarga Python (boton amarillo grande)
+3. Abre el instalador
+4. MUY IMPORTANTE: marca la casilla de abajo que dice
+   "Add Python to PATH" ANTES de darle Install
+5. Dale a "Install Now" y espera a que termine
+
+
+--------------------------------------------------
+PASO 2: ARRANCAR EL SISTEMA (cada dia)
+--------------------------------------------------
+
+1. Haz doble clic en el archivo:
+   "INICIAR PORTAL IMPERIAL.bat"
+
+2. Se abre una ventana negra (NO la cierres mientras trabajas)
+
+3. Se abre solo el navegador con el sistema
+
+4. Listo, ya puedes trabajar e imprimir
+
+
+--------------------------------------------------
+PASO 3: ACTIVAR LA IMPRESORA (solo la primera vez)
+--------------------------------------------------
+
+1. Asegurate que QZ Tray este abierto (iconito cerca del reloj)
+2. En el sistema, entra como admin
+3. Ve a Configuracion -> Impresion Termica (QZ Tray)
+4. Marca "Activar impresion por QZ Tray"
+5. Verifica que diga: POS printer 203DPI series
+6. Marca "Este es el computador que imprime (estacion de caja)"
+7. Dale a "Probar conexion" -> debe decir CONECTADO
+8. Dale a "Imprimir prueba" -> debe salir un ticket
+
+
+--------------------------------------------------
+IMPORTANTE
+--------------------------------------------------
+
+- La ventana negra debe quedar ABIERTA todo el servicio.
+  Si la cierras, se apaga el sistema local.
+
+- Para apagar al cerrar el restaurante: solo cierra la ventana negra.
+
+- Todos los datos se guardan en la nube (Firebase), igual que antes.
+  No pierdes nada, todo se sincroniza con los celulares.
+
+- Si el sistema no abre, revisa que Python este instalado (Paso 1).
