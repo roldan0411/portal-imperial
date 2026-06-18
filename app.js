@@ -522,6 +522,8 @@ function guardarMesa(){
       v.items=[...STATE.order]; v.subtotal=subtotal; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
       v.total=total; v.obs=STATE.orderObs; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
       v.estadoCocina='pendiente'; // vuelve a cocina por si agregó/quitó platos
+      v.ticketImpreso=false; // reimprimir comanda con los cambios
+      v.reimpreso=(v.reimpreso||0)+1;
       DB.set('ventas',vs);
       logAudit('Actualizó mesa',`${v.mesa} por ${STATE.user.nombre}`);
       notifyKitchen();
@@ -586,8 +588,12 @@ function cobrarVenta(){
     const v=vs.find(x=>x.id===STATE.editandoVenta.id);
     if(v){ v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0;
       v.total=ventaReal; v.obs=STATE.orderObs;
+      v.estadoCocina='pendiente'; // vuelve a cocina con los cambios
+      v.ticketImpreso=false; v.reimpreso=(v.reimpreso||0)+1; // reimprimir comanda
       v.modificadoPor=STATE.user.nombre; v.modificadoEn=now(); DB.set('ventas',vs);
-      logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado','success'); }
+      notifyKitchen();
+      logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado y reenviado a cocina','success');
+      printTicketCocina(v); }
     clearOrder(); showPage('pedidos'); return;
   }
 
@@ -633,8 +639,19 @@ function imprimirConQZ(html){
   const impresora=cfg.qzImpresora||'POS printer 203DPI series';
   return conectarQZ().then(()=>qz.printers.find(impresora)).then(found=>{
     const printer = Array.isArray(found)? found[0] : found;
-    const config = qz.configs.create(printer, { scaleContent:true, rasterize:true, margins:{top:0,right:0,bottom:0,left:0} });
-    const data = [{ type:'pixel', format:'html', flavor:'plain', data:`<div style="width:72mm;font-family:'Courier New',monospace;">${html}</div>` }];
+    const config = qz.configs.create(printer, {
+      scaleContent:true,
+      rasterize:true,
+      units:'mm',
+      size:{ width:72, height:null },
+      margins:0,
+      colorType:'grayscale',
+      interpolation:'nearest-neighbor'
+    });
+    const data = [{
+      type:'pixel', format:'html', flavor:'plain',
+      data:`<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:72mm;font-family:'Courier New',monospace;color:#000;}</style></head><body><div style="width:72mm;padding:2mm;">${html}</div></body></html>`
+    }];
     return qz.print(config, data);
   });
 }
@@ -653,17 +670,17 @@ function imprimirHTML(html){
   // Si QZ Tray está activado Y este es el computador de la caja (estación), imprime directo a la térmica
   if(cfg.qzActivo && esEstacionImpresion()){
     imprimirConQZ(html).then(()=>{}).catch(err=>{
-      console.warn('QZ Tray falló, usando método normal:', err);
-      toast('No se pudo imprimir por QZ Tray. Revise que esté abierto.','error');
-      imprimirNavegador(html);
+      console.warn('QZ Tray falló:', err);
+      // NO abrir el diálogo del navegador (el usuario no quiere esa pantalla).
+      toast('No se pudo imprimir por QZ Tray. Revise que esté abierto y la impresora encendida.','error');
     });
     return;
   }
-  // Si QZ está activo pero este NO es el computador de impresión (ej: celular del mesero), no imprime aquí.
+  // Si QZ está activo pero este NO es la estación (ej: celular del mesero), no imprime aquí.
   if(cfg.qzActivo && !esEstacionImpresion()){
-    // El computador de la caja imprimirá automáticamente. No hacer nada en este dispositivo.
-    return;
+    return; // el computador de la caja imprime automáticamente
   }
+  // Sin QZ: método normal del navegador
   imprimirNavegador(html);
 }
 function imprimirNavegador(html){
@@ -712,6 +729,7 @@ function facturaHTML(v){
       <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${fmtDate(v.fechaCobro||v.fecha)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Tipo:</span><span>${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}</span></div>
       ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
+      ${v.cliTel?`<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${escapeHtml(v.cliTel)}</span></div>`:''}
       ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección:</span><span>${escapeHtml(v.cliDir)}</span></div>`:''}
       ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero:</span><span>${escapeHtml(v.domiciliario)}</span></div>`:''}
       <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.cajero||'')}</span></div>
@@ -752,6 +770,7 @@ function ticketCocinaHTML(v){
   return `
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
+    ${v.reimpreso?`<div style="border:2px solid #000;padding:4px;margin:4px 0;font-size:16px;font-weight:bold;">⚠ PEDIDO MODIFICADO ⚠<br>(reimpresión ${v.reimpreso})</div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
     ${esDom?`<div style="font-size:16px;line-height:1.5;margin-bottom:6px;font-weight:bold;">
