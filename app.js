@@ -638,17 +638,30 @@ function imprimirConQZ(html){
     return qz.print(config, data);
   });
 }
+// ¿Este dispositivo es la estación de impresión? (se marca solo en el computador de la caja)
+function esEstacionImpresion(){ try{ return localStorage.getItem('pi_estacion_impresion')==='1'; }catch(e){ return false; } }
+function setEstacionImpresion(on){ try{ localStorage.setItem('pi_estacion_impresion', on?'1':'0'); }catch(e){} }
+// ¿Este equipo debe imprimir directo al crear un pedido?
+function debeImprimirAqui(){
+  const cfg=DB.get('config')||{};
+  if(!cfg.qzActivo) return true; // sin QZ, cada equipo imprime normal
+  return esEstacionImpresion();  // con QZ, solo la estación
+}
+
 function imprimirHTML(html){
   const cfg=DB.get('config')||{};
-  // Si QZ Tray está activado, imprimir directo a la térmica (sin diálogo, sin texto raro)
-  if(cfg.qzActivo){
-    imprimirConQZ(html).then(()=>{
-      // impreso correctamente
-    }).catch(err=>{
+  // Si QZ Tray está activado Y este es el computador de la caja (estación), imprime directo a la térmica
+  if(cfg.qzActivo && esEstacionImpresion()){
+    imprimirConQZ(html).then(()=>{}).catch(err=>{
       console.warn('QZ Tray falló, usando método normal:', err);
-      toast('No se pudo imprimir por QZ Tray. Revise que esté abierto. Usando impresión normal.','error');
+      toast('No se pudo imprimir por QZ Tray. Revise que esté abierto.','error');
       imprimirNavegador(html);
     });
+    return;
+  }
+  // Si QZ está activo pero este NO es el computador de impresión (ej: celular del mesero), no imprime aquí.
+  if(cfg.qzActivo && !esEstacionImpresion()){
+    // El computador de la caja imprimirá automáticamente. No hacer nada en este dispositivo.
     return;
   }
   imprimirNavegador(html);
@@ -675,10 +688,14 @@ function probarImpresionQZ(){
   });
 }
 function printFactura(v){
+  if(!debeImprimirAqui()) return; // con QZ activo, solo imprime la estación de la caja
+  imprimirHTML(facturaHTML(v));
+}
+function facturaHTML(v){
   const cfg=DB.get('config')||{};
   const esDom = v.tipo==='domicilio';
   const subtotalItems = v.items.reduce((a,i)=>a+i.precio*i.qty,0);
-  const html=`
+  return `
   <div style="font-family:'Courier New',monospace;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
       ${cfg.logo?`<img src="${cfg.logo}" style="max-height:90px;max-width:200px;margin-bottom:6px;">`:''}
@@ -721,9 +738,8 @@ function printFactura(v){
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
     ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:12px;color:#444;margin-top:10px;letter-spacing:1px;border-top:1px dotted #999;padding-top:8px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
   </div>`;
-  imprimirHTML(html);
 }
-function printTicketCocina(v){
+function ticketCocinaHTML(v){
   const esDom = v.tipo==='domicilio';
   const orden = v.ordenCocina?('#'+String(v.ordenCocina).padStart(3,'0')):'';
   let destino='';
@@ -733,7 +749,7 @@ function printTicketCocina(v){
   const encabezado = esDom
     ? `<div style="font-size:34px;font-weight:bold;line-height:1.1;margin:8px 0;">${escapeHtml((v.cliNombre||'CLIENTE').toUpperCase())}</div>`
     : `<div style="font-size:42px;font-weight:bold;line-height:1.1;margin:8px 0;">ORDEN ${orden}</div>`;
-  const html=`
+  return `
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
     ${encabezado}
@@ -751,7 +767,13 @@ function printTicketCocina(v){
     ${v.obs?`<hr style="border:1px dashed #000;margin:8px 0;"><div style="font-size:16px;font-weight:bold;">NOTA: ${escapeHtml(v.obs)}</div>`:''}
   </div>
   <div style="text-align:center;font-size:18px;margin-top:10px;">--- &#9986; ---</div>`;
-  imprimirHTML(html);
+}
+function printTicketCocina(v){
+  const cfg=DB.get('config')||{};
+  // Si QZ Tray está activo, la impresión la hace la cola automática del computador de caja
+  // (evita impresiones duplicadas). Si no, imprime normal aquí.
+  if(cfg.qzActivo){ try{ revisarColaImpresion(); }catch(e){} return; }
+  imprimirHTML(ticketCocinaHTML(v));
 }
 
 // ========================= NOTIFICACIÓN COCINA (SONIDO) =========================
@@ -1391,6 +1413,11 @@ function config(){
         <button class="btn btn-ghost" onclick="probarImpresionQZ()">${ic('i-orders')} Imprimir prueba</button>
       </div>
       <p class="text-xs text-gray mt-2" id="qz-estado">Estado: sin verificar</p>
+      <hr class="divider">
+      <div style="padding:10px;border-radius:8px;background:rgba(212,175,55,0.06);">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;"><input type="checkbox" id="cfg-estacion" ${esEstacionImpresion()?'checked':''} onchange="toggleEstacion(this.checked)" style="width:auto;"> <strong>Este es el computador que imprime (estación de caja)</strong></label>
+        <p class="text-xs text-gray mt-1">Marca esta casilla SOLO en el computador de la caja conectado a la impresora. Ese equipo imprimirá automáticamente los pedidos que lleguen desde los celulares. Déjala desmarcada en celulares y tablets.</p>
+      </div>
     </div>
     <div class="card"><div class="card-title">${ic('i-trash')} Permisos de Eliminación Definitiva</div>
       <p class="text-sm text-gray mb-2">La eliminación definitiva borra el pedido de ventas, caja, reportes y estadísticas sin dejar rastro. Solo el administrador puede ejecutarla.</p>
@@ -1449,11 +1476,30 @@ function saveMarcaAgua(){
   c.marcaAguaActiva=document.getElementById('cfg-marca-activa').checked;
   DB.set('config',c); logAudit('Modificó marca de agua'); toast('Marca de agua guardada','success');
 }
+function toggleEstacion(on){
+  setEstacionImpresion(on);
+  if(on){
+    // Marcar TODOS los pedidos actuales como ya impresos, para que solo imprima los NUEVOS de aquí en adelante
+    const vs=DB.get('ventas')||[]; let cambio=false;
+    vs.forEach(v=>{ if(!v.ticketImpreso){ v.ticketImpreso=true; cambio=true; } if(v.estado==='pagada' && !v.facturaImpresa){ v.facturaImpresa=true; cambio=true; } });
+    if(cambio) DB.set('ventas',vs);
+    toast('Estación activada. Imprimirá solo los pedidos NUEVOS de aquí en adelante.','success');
+    arrancarAutoImpresion();
+  } else {
+    toast('Este dispositivo ya no imprime automáticamente','info');
+  }
+}
 function saveQZ(){
   const c=DB.get('config')||{};
   c.qzActivo=document.getElementById('cfg-qz-activo').checked;
   c.qzImpresora=document.getElementById('cfg-qz-impresora').value.trim();
   DB.set('config',c); logAudit('Modificó impresión QZ Tray',c.qzActivo?'Activado':'Desactivado'); toast('Configuración de impresión guardada','success');
+}
+// ----- Estación de impresión -----
+let autoImpresionTimer=null;
+function arrancarAutoImpresion(){
+  if(autoImpresionTimer) return;
+  autoImpresionTimer=setInterval(()=>{ try{ revisarColaImpresion(); }catch(e){} }, 5000);
 }
 function probarConexionQZ(){
   const est=document.getElementById('qz-estado');
@@ -1836,6 +1882,8 @@ function bootApp(){
     else if(e.key==='F8'){ e.preventDefault(); bloquearPantalla(); }
     else if(e.key==='Escape'){ document.querySelectorAll('.modal-overlay').forEach(m=>{ if(m.style.display==='flex') m.style.display='none'; }); }
   });
+  // Si este computador es la estación de impresión, arrancar la impresión automática
+  if(esEstacionImpresion()){ setTimeout(arrancarAutoImpresion, 3000); }
 }
 
 function startFirebase(){
@@ -1900,8 +1948,42 @@ function listenRealtime(){
         if(STATE.page!=='ventas'){ try{ showPage(STATE.page); }catch(e){} }
         updateBadges();
       }
+      // Si llegan ventas nuevas y este es el computador de impresión, imprimir lo pendiente
+      if(k==='ventas'){ try{ revisarColaImpresion(); }catch(e){} }
     });
   });
+}
+
+// ===================== COLA DE IMPRESIÓN AUTOMÁTICA =====================
+// El computador de la caja (estación) imprime automáticamente los pedidos nuevos
+let imprimiendoCola=false;
+function revisarColaImpresion(){
+  const cfg=DB.get('config')||{};
+  if(!cfg.qzActivo || !esEstacionImpresion()) return; // solo el computador de impresión
+  if(imprimiendoCola) return;
+  const vs=DB.get('ventas')||[];
+  // SOLO pedidos recientes (últimos 30 min). Evita imprimir todo el histórico en bucle.
+  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30;
+  const tickets=vs.filter(v=>v.estado!=='anulada' && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
+  const facturas=vs.filter(v=>v.estado==='pagada' && !v.facturaImpresa && reciente(v)).map(v=>({v,tipo:'factura'}));
+  const pendientes=[...tickets,...facturas];
+  if(pendientes.length===0) return;
+  // Seguridad: nunca imprimir más de 6 cosas en una pasada (si hay más, algo está mal)
+  const lote=pendientes.slice(0,6);
+  imprimiendoCola=true;
+  let i=0;
+  function siguiente(){
+    if(i>=lote.length){ imprimiendoCola=false; return; }
+    const item=lote[i]; i++;
+    const html = item.tipo==='ticket'? ticketCocinaHTML(item.v) : facturaHTML(item.v);
+    try{ imprimirConQZ(html).then(()=>{
+      const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===item.v.id);
+      if(t){ if(item.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; DB.set('ventas',all); }
+      setTimeout(siguiente, 1000);
+    }).catch(err=>{ console.warn('Cola impresión:',err); imprimiendoCola=false; }); }
+    catch(e){ imprimiendoCola=false; }
+  }
+  siguiente();
 }
 
 // Bandera para no refrescar mientras se arma un pedido
