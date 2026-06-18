@@ -236,6 +236,7 @@ const NAV = [
   {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero']},
   {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor'],badge:'cocina'},
   {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina']},
+  {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor']},
   {sec:'Gestión'},
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor']},
@@ -278,7 +279,8 @@ const PAGE_META={
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
   reportes:['i-report','Reportes'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
   asistencia:['i-clock','Control de Asistencia'],
-  tiempos:['i-clock','Tiempos de Entrega']
+  tiempos:['i-clock','Tiempos de Entrega'],
+  impresiones:['i-orders','Impresiones']
 };
 function showPage(name){
   STATE.page=name;
@@ -287,7 +289,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config,asistencia,tiempos};
+  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config,asistencia,tiempos,impresiones};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -661,8 +663,11 @@ function setEstacionImpresion(on){ try{ localStorage.setItem('pi_estacion_impres
 // ¿Este equipo debe imprimir directo al crear un pedido?
 function debeImprimirAqui(){
   const cfg=DB.get('config')||{};
-  if(!cfg.qzActivo) return true; // sin QZ, cada equipo imprime normal
-  return esEstacionImpresion();  // con QZ, solo la estación
+  // Si el Centro de Impresión está activo (global), NINGÚN dispositivo imprime al crear:
+  // solo el computador de la caja imprime desde su Centro de Impresión.
+  if(cfg.centroImpresionActivo) return false;
+  if(!cfg.qzActivo) return true;
+  return esEstacionImpresion();
 }
 
 function imprimirHTML(html){
@@ -1585,6 +1590,101 @@ function delDomiciliario(id){ DB.set('domiciliarios',(DB.get('domiciliarios')||[
 // ========================= CONTROL DE ASISTENCIA (gestión + reportes) =========================
 let asisPeriodo='dia';
 function setAsisPeriodo(p){ asisPeriodo=p; showPage('asistencia'); }
+// ========================= IMPRESIONES (cola para el cajero) =========================
+// Esta pantalla vive en el computador de la caja. Cuando un mesero crea un pedido,
+// aquí aparece la comanda de cocina y la factura, y se imprimen solas por USB (método normal Windows).
+let autoImpresionCajaTimer=null;
+function impresiones(){
+  // Marcar este equipo como el que imprime (para que la auto-impresión funcione aquí)
+  if(!autoImpresionCajaTimer){
+    autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes, 4000);
+  }
+  const vs=DB.get('ventas')||[];
+  // Pedidos recientes (últimas 3 horas), no anulados
+  const reciente = v => (ahoraMs()-new Date(v.fecha))/3600000 < 3;
+  const lista=vs.filter(v=>v.estado!=='anulada' && reciente(v))
+    .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  const autoOn = imprAutoActiva();
+  return `
+  <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
+    <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+      <div>
+        <div class="card-title" style="margin:0;">${ic('i-orders')} Centro de Impresión</div>
+        <p class="text-sm text-gray" style="margin:4px 0 0;">Deja esta pantalla abierta en el computador de la caja. Los pedidos de los meseros se imprimen aquí por USB.</p>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 14px;border-radius:8px;background:${autoOn?'rgba(46,204,113,0.15)':'rgba(231,76,60,0.12)'};">
+        <input type="checkbox" ${autoOn?'checked':''} onchange="toggleImprAuto(this.checked)" style="width:auto;">
+        <strong>${autoOn?'✓ Impresión automática ACTIVA':'Impresión automática apagada'}</strong>
+      </label>
+    </div>
+  </div>
+  ${!autoOn?`<div class="card" style="border:1px solid var(--orange);"><p class="text-sm" style="color:var(--orange);margin:0;">${ic('i-warning')} La impresión automática está apagada. Actívala arriba para que los pedidos se impriman solos en este computador.</p></div>`:''}
+  <div class="card">
+    <div class="card-title">${ic('i-clock')} Pedidos recientes</div>
+    ${lista.length===0?`<p class="text-gray" style="text-align:center;padding:20px;">No hay pedidos recientes. Cuando un mesero tome un pedido, aparecerá aquí y se imprimirá solo.</p>`:`
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido</th><th>Tipo</th><th>Cliente/Mesa</th><th>Hora</th><th>Cocina</th><th>Factura</th><th>Reimprimir</th></tr></thead><tbody>
+    ${lista.map(v=>`<tr>
+      <td><span class="text-gold font-bold">${refPedido(v)}</span></td>
+      <td>${tipoLabel(v.tipo)}</td>
+      <td>${escapeHtml(v.cliNombre||v.mesa||'—')}</td>
+      <td class="text-xs text-gray">${fmtDate(v.fecha)}</td>
+      <td>${v.ticketImpreso?'<span class="badge badge-green">✓ Impresa</span>':'<span class="badge badge-orange">Pendiente</span>'}</td>
+      <td>${v.estado==='pagada'?(v.facturaImpresa?'<span class="badge badge-green">✓ Impresa</span>':'<span class="badge badge-orange">Pendiente</span>'):'<span class="text-xs text-gray">sin cobrar</span>'}</td>
+      <td style="display:flex;gap:5px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" onclick="reimprimirComanda('${v.id}')" title="Reimprimir comanda">${ic('i-chef')}</button>
+        ${v.estado==='pagada'?`<button class="btn btn-ghost btn-sm" onclick="reimprimirFactura('${v.id}')" title="Reimprimir factura">${ic('i-cash')}</button>`:''}
+      </td>
+    </tr>`).join('')}
+    </tbody></table></div>`}
+  </div>`;
+}
+function imprAutoActiva(){ try{ return localStorage.getItem('pi_impr_auto')==='1'; }catch(e){ return false; } }
+function toggleImprAuto(on){
+  try{ localStorage.setItem('pi_impr_auto', on?'1':'0'); }catch(e){}
+  const cfg=DB.get('config')||{};
+  cfg.centroImpresionActivo = on; // bandera GLOBAL: los demás dispositivos no imprimen al crear
+  DB.set('config',cfg);
+  if(on){
+    // Marcar lo existente como ya impreso para no imprimir el histórico de golpe
+    const vs=DB.get('ventas')||[]; let ch=false;
+    vs.forEach(v=>{ if(!v.ticketImpreso){v.ticketImpreso=true;ch=true;} if(v.estado==='pagada'&&!v.facturaImpresa){v.facturaImpresa=true;ch=true;} });
+    if(ch) DB.set('ventas',vs);
+    toast('Impresión automática activada en este computador. Solo imprimirá pedidos NUEVOS.','success');
+    if(!autoImpresionCajaTimer) autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes, 4000);
+  } else {
+    toast('Impresión automática apagada','info');
+  }
+  showPage('impresiones');
+}
+let procesandoImpr=false;
+function procesarImpresionesPendientes(){
+  if(!imprAutoActiva() || procesandoImpr) return;
+  const vs=DB.get('ventas')||[];
+  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30; // solo últimos 30 min
+  // Buscar UNA cosa pendiente por pasada (para imprimir de a una, en orden)
+  let trabajo=null;
+  for(const v of [...vs].reverse()){ // del más viejo al más nuevo = en orden
+    if(v.estado==='anulada' || !reciente(v)) continue;
+    if(!v.ticketImpreso){ trabajo={v,tipo:'ticket'}; break; }
+    if(v.estado==='pagada' && !v.facturaImpresa){ trabajo={v,tipo:'factura'}; break; }
+  }
+  if(!trabajo) return;
+  procesandoImpr=true;
+  const html = trabajo.tipo==='ticket'? ticketCocinaHTML(trabajo.v) : facturaHTML(trabajo.v);
+  imprimirNavegador(html);
+  // Marcar como impreso
+  const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===trabajo.v.id);
+  if(t){ if(trabajo.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpreso=true; if(trabajo.tipo==='factura') t.facturaImpresa=true; DB.set('ventas',all); }
+  setTimeout(()=>{ procesandoImpr=false; }, 2500); // pausa entre impresiones
+}
+function reimprimirComanda(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  imprimirNavegador(ticketCocinaHTML(v)); toast('Reimprimiendo comanda...','info');
+}
+function reimprimirFactura(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  imprimirNavegador(facturaHTML(v)); toast('Reimprimiendo factura...','info');
+}
 function tiempos(){
   const vs=DB.get('ventas')||[];
   // Pedidos con tiempo medido (entrada a cocina -> listo), ordenados del más reciente al más viejo
@@ -1903,6 +2003,8 @@ function bootApp(){
   });
   // Si este computador es la estación de impresión, arrancar la impresión automática
   if(esEstacionImpresion()){ setTimeout(arrancarAutoImpresion, 3000); }
+  // Si este computador tiene el Centro de Impresión activo, arrancar su cola
+  if(imprAutoActiva()){ setTimeout(()=>{ if(!autoImpresionCajaTimer) autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes,4000); }, 3000); }
 }
 
 function startFirebase(){
@@ -1968,7 +2070,7 @@ function listenRealtime(){
         updateBadges();
       }
       // Si llegan ventas nuevas y este es el computador de impresión, imprimir lo pendiente
-      if(k==='ventas'){ try{ revisarColaImpresion(); }catch(e){} }
+      if(k==='ventas'){ try{ revisarColaImpresion(); }catch(e){} try{ procesarImpresionesPendientes(); }catch(e){} }
     });
   });
 }
