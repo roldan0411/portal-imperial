@@ -116,7 +116,8 @@ function initData(){
     nombre:'Portal Imperial', nit:'900.123.456-7', dir:'Calle 10 #5-20', tel:'(7) 633 0000',
     numMesas:25, permitirEliminarDomicilio:true, permitirEliminarMesa:false, permitirEliminarLlevar:false,
     gpsActivo:false, gpsLat:0, gpsLng:0, gpsRadio:100, logo:(window.LOGO_DEFAULT||''),
-    marcaAgua:'WALLACE COMPANY SYSTEM ING CCIA ROLDAN A.', marcaAguaActiva:true
+    marcaAgua:'WALLACE COMPANY SYSTEM ING CCIA ROLDAN A.', marcaAguaActiva:true,
+    qzActivo:false, qzImpresora:'POS printer 203DPI series'
   });
   // Si ya existe config pero sin logo, poner el logo por defecto
   (function(){ const c=DB.get('config')||{}; if(!c.logo && window.LOGO_DEFAULT){ c.logo=window.LOGO_DEFAULT; DB.set('config',c); } })();
@@ -617,13 +618,61 @@ function cobrarVenta(){
 
 // ========================= IMPRESIÓN =========================
 // Impresión robusta: en móvil abre ventana nueva (más confiable que window.print directo)
+// ===================== IMPRESIÓN (con soporte QZ Tray) =====================
+let qzConectado=false;
+function qzListo(){ return (typeof qz!=='undefined') && qz.websocket && qz.websocket.isActive && qz.websocket.isActive(); }
+function conectarQZ(){
+  return new Promise((resolve,reject)=>{
+    if(typeof qz==='undefined'){ reject('QZ Tray no está cargado'); return; }
+    if(qzListo()){ resolve(); return; }
+    qz.websocket.connect().then(()=>{ qzConectado=true; resolve(); }).catch(err=>{ qzConectado=false; reject(err); });
+  });
+}
+function imprimirConQZ(html){
+  const cfg=DB.get('config')||{};
+  const impresora=cfg.qzImpresora||'POS printer 203DPI series';
+  return conectarQZ().then(()=>qz.printers.find(impresora)).then(found=>{
+    const printer = Array.isArray(found)? found[0] : found;
+    const config = qz.configs.create(printer, { scaleContent:true, rasterize:true, margins:{top:0,right:0,bottom:0,left:0} });
+    const data = [{ type:'pixel', format:'html', flavor:'plain', data:`<div style="width:72mm;font-family:'Courier New',monospace;">${html}</div>` }];
+    return qz.print(config, data);
+  });
+}
 function imprimirHTML(html){
+  const cfg=DB.get('config')||{};
+  // Si QZ Tray está activado, imprimir directo a la térmica (sin diálogo, sin texto raro)
+  if(cfg.qzActivo){
+    imprimirConQZ(html).then(()=>{
+      // impreso correctamente
+    }).catch(err=>{
+      console.warn('QZ Tray falló, usando método normal:', err);
+      toast('No se pudo imprimir por QZ Tray. Revise que esté abierto. Usando impresión normal.','error');
+      imprimirNavegador(html);
+    });
+    return;
+  }
+  imprimirNavegador(html);
+}
+function imprimirNavegador(html){
   const pa=document.getElementById('print-area');
   if(!pa) return;
   pa.innerHTML=html;
   pa.style.display='block';
   window.print();
   pa.style.display='none';
+}
+function probarImpresionQZ(){
+  const html=`<div style="text-align:center;font-family:'Courier New',monospace;">
+    <div style="font-size:18px;font-weight:bold;">PRUEBA DE IMPRESIÓN</div>
+    <div style="font-size:14px;margin-top:8px;">Portal Imperial</div>
+    <div style="font-size:13px;margin-top:6px;">Si lees esto, QZ Tray funciona ✓</div>
+    <div style="font-size:11px;margin-top:8px;">${fmtDate(now())}</div>
+    <div style="font-size:18px;margin-top:8px;">--- &#9986; ---</div></div>`;
+  imprimirConQZ(html).then(()=>{
+    toast('Prueba enviada a la impresora','success');
+  }).catch(err=>{
+    toast('Error: '+(err.message||err||'no se pudo conectar a QZ Tray'),'error');
+  });
 }
 function printFactura(v){
   const cfg=DB.get('config')||{};
@@ -1332,6 +1381,17 @@ function config(){
       <div class="form-group"><label>Texto de la marca de agua</label><input type="text" id="cfg-marca-texto" value="${escapeHtml(c.marcaAgua||'')}"></div>
       <button class="btn btn-gold" onclick="saveMarcaAgua()">${ic('i-check')} Guardar Marca de Agua</button>
     </div>
+    <div class="card" style="grid-column:1/-1"><div class="card-title">${ic('i-cash')} Impresión Térmica (QZ Tray)</div>
+      <p class="text-sm text-gray mb-2">Imprime directo a la impresora térmica sin el diálogo de Windows y sin texto raro. Requiere tener <strong>QZ Tray</strong> instalado y abierto en el computador de la caja.</p>
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-qz-activo" ${c.qzActivo?'checked':''} style="width:auto;"> <strong>Activar impresión por QZ Tray</strong></label>
+      <div class="form-group"><label>Nombre exacto de la impresora</label><input type="text" id="cfg-qz-impresora" value="${escapeHtml(c.qzImpresora||'')}" placeholder="POS printer 203DPI series"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-gold" onclick="saveQZ()">${ic('i-check')} Guardar</button>
+        <button class="btn btn-ghost" onclick="probarConexionQZ()">${ic('i-cash')} Probar conexión</button>
+        <button class="btn btn-ghost" onclick="probarImpresionQZ()">${ic('i-orders')} Imprimir prueba</button>
+      </div>
+      <p class="text-xs text-gray mt-2" id="qz-estado">Estado: sin verificar</p>
+    </div>
     <div class="card"><div class="card-title">${ic('i-trash')} Permisos de Eliminación Definitiva</div>
       <p class="text-sm text-gray mb-2">La eliminación definitiva borra el pedido de ventas, caja, reportes y estadísticas sin dejar rastro. Solo el administrador puede ejecutarla.</p>
       <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-del-dom" ${c.permitirEliminarDomicilio?'checked':''} style="width:auto;"> Permitir eliminar domicilios</label>
@@ -1388,6 +1448,26 @@ function saveMarcaAgua(){
   c.marcaAgua=document.getElementById('cfg-marca-texto').value;
   c.marcaAguaActiva=document.getElementById('cfg-marca-activa').checked;
   DB.set('config',c); logAudit('Modificó marca de agua'); toast('Marca de agua guardada','success');
+}
+function saveQZ(){
+  const c=DB.get('config')||{};
+  c.qzActivo=document.getElementById('cfg-qz-activo').checked;
+  c.qzImpresora=document.getElementById('cfg-qz-impresora').value.trim();
+  DB.set('config',c); logAudit('Modificó impresión QZ Tray',c.qzActivo?'Activado':'Desactivado'); toast('Configuración de impresión guardada','success');
+}
+function probarConexionQZ(){
+  const est=document.getElementById('qz-estado');
+  if(est) est.textContent='Estado: conectando...';
+  conectarQZ().then(()=>{
+    return qz.printers.find();
+  }).then(printers=>{
+    const lista=Array.isArray(printers)?printers:[printers];
+    if(est) est.innerHTML=`<span class="text-green">✓ QZ Tray conectado.</span> Impresoras detectadas: ${lista.map(p=>escapeHtml(p)).join(', ')}`;
+    toast('QZ Tray conectado correctamente','success');
+  }).catch(err=>{
+    if(est) est.innerHTML=`<span class="text-red">✗ No se pudo conectar.</span> Verifique que QZ Tray esté abierto en este computador.`;
+    toast('No se pudo conectar a QZ Tray','error');
+  });
 }
 
 // ----- Respaldo de datos (exportar / importar) -----
