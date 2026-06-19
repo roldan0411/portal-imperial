@@ -544,7 +544,7 @@ function guardarMesa(){
     cliNombre:'',cliTel:'',cliDir:'',cliBarrio:'', valorDom:0,
     items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total, metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
-    obs:STATE.orderObs, cajero:STATE.user?.nombre, cajaId:DB.get('caja_actual')?.id||null };
+    obs:STATE.orderObs, cajero:STATE.user?.nombre, atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol, cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); DB.set('ventas',vs);
   logAudit('Abrió mesa',STATE.mesa);
   notifyKitchen();
@@ -568,7 +568,7 @@ function guardarPedidoAbierto(){
     valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
-    obs:STATE.orderObs, cajero:'', mesero:STATE.user.nombre, creadoPor:STATE.user.nombre, cajaId:DB.get('caja_actual')?.id||null };
+    obs:STATE.orderObs, cajero:'', mesero:STATE.user.nombre, creadoPor:STATE.user.nombre, atendidoPor:STATE.user.nombre, atendidoRol:STATE.user.rol, cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); DB.set('ventas',vs);
   if(esDomicilio){
     const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
@@ -610,7 +610,7 @@ function cobrarVenta(){
     valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
-    obs:STATE.orderObs, cajero:STATE.user?.nombre, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
+    obs:STATE.orderObs, cajero:STATE.user?.nombre, atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); DB.set('ventas',vs);
 
   if(esDomicilio){
@@ -742,7 +742,8 @@ function facturaHTML(v){
       ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección:</span><span>${escapeHtml(v.cliDir)}</span></div>`:''}
       ${esDom&&v.cliBarrio?`<div style="display:flex;justify-content:space-between;"><span>Barrio:</span><span>${escapeHtml(v.cliBarrio)}</span></div>`:''}
       ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero:</span><span>${escapeHtml(v.domiciliario)}</span></div>`:''}
-      <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.cajero||'')}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.atendidoPor||v.mesero||v.cajero||'')}</span></div>
+      ${v.cobradoPor && v.cobradoPor!==(v.atendidoPor||v.mesero||v.cajero)?`<div style="display:flex;justify-content:space-between;"><span>Cobró:</span><span>${escapeHtml(v.cobradoPor)}</span></div>`:''}
     </div>
     <div style="border-top:1px dashed #000;padding-top:4px;">
       <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:4px;">
@@ -896,7 +897,7 @@ function domiciliarioSelect(v){
   return `<select onchange="asignarDomiciliario('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="">Asignar...</option>${ds.map(d=>`<option ${v.domiciliario===d.nombre?'selected':''}>${escapeHtml(d.nombre)}</option>`).join('')}</select>`;
 }
 function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;DB.set('ventas',vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
-function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';DB.set('ventas',vs);} updateBadges(); }
+function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';DB.set('ventas',vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
 function editarPedido(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   STATE.editandoVenta=v; STATE.order=v.items.map(i=>({...i})); STATE.tipoPedido=v.tipo; STATE.mesa=v.mesa||'';
@@ -1418,10 +1419,20 @@ function reportes(){
 function auditoria(){
   if(STATE.user.rol!=='admin') return `<div class="empty-state">${ic('i-lock')}<p>Acceso restringido. Solo el administrador puede ver la auditoría.</p></div>`;
   const logs=DB.get('auditoria')||[];
-  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-audit')} Registro de Auditoría</div><span class="badge badge-gold">${logs.length} registros · Solo lectura</span></div>
-    ${logs.length===0?`<div class="empty-state">${ic('i-empty')}<p>Sin registros</p></div>`:
+  const usuarios=[...new Set(logs.map(l=>l.usuario))].sort();
+  const filtro=STATE.auditFiltro||'';
+  const filtrados=filtro?logs.filter(l=>l.usuario===filtro):logs;
+  return `<div class="card"><div class="flex-between mb-2" style="flex-wrap:wrap;gap:10px;"><div class="card-title" style="margin:0;">${ic('i-audit')} Registro de Auditoría</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <select class="mini-input" style="width:auto;" onchange="STATE.auditFiltro=this.value;showPage('auditoria')">
+        <option value="">Todos los usuarios</option>
+        ${usuarios.map(u=>`<option value="${escapeHtml(u)}" ${u===filtro?'selected':''}>${escapeHtml(u)}</option>`).join('')}
+      </select>
+      <span class="badge badge-gold">${filtrados.length} registros</span>
+    </div></div>
+    ${filtrados.length===0?`<div class="empty-state">${ic('i-empty')}<p>Sin registros${filtro?' para '+escapeHtml(filtro):''}</p></div>`:
     `<div class="table-wrap"><table class="data-table"><thead><tr><th>Usuario</th><th>Acción</th><th>Detalle</th><th>Fecha</th></tr></thead><tbody>
-    ${logs.slice(0,300).map(l=>`<tr><td><strong>${escapeHtml(l.usuario)}</strong></td><td>${escapeHtml(l.accion)}</td><td class="text-sm text-gray">${escapeHtml(l.detalle||'—')}</td><td class="text-xs text-gray">${fmtDate(l.fecha)}</td></tr>`).join('')}
+    ${filtrados.slice(0,400).map(l=>`<tr><td><strong>${escapeHtml(l.usuario)}</strong></td><td>${escapeHtml(l.accion)}</td><td class="text-sm text-gray">${escapeHtml(l.detalle||'—')}</td><td class="text-xs text-gray">${fmtDate(l.fecha)}</td></tr>`).join('')}
     </tbody></table></div>`}</div>`;
 }
 
