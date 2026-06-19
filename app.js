@@ -869,7 +869,9 @@ function renderPedidosTable(vs){
   const isAdmin=STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido / Mensajero</th><th>Tipo</th><th>Cliente/Mesa</th><th>Total</th><th>Cobro</th><th>Cocina</th><th>Pedido</th><th>Domiciliario</th><th>Acciones</th></tr></thead><tbody>
   ${list.map(v=>{
-    const editable = isAdmin || (v.estadoCocina!=='entregado' && v.estadoPedido!=='entregado');
+    // Admin/supervisor editan siempre. Cajero y mesero pueden editar mientras el pedido NO esté pagado.
+    const noPagado = v.estado!=='pagada';
+    const editable = isAdmin || noPagado;
     const abierta = v.estado==='abierta';
     const porVerificar = v.estado==='por_verificar';
     return `<tr ${abierta?'style="background:rgba(212,175,55,0.06)"':porVerificar?'style="background:rgba(52,152,219,0.08)"':''}>
