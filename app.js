@@ -869,9 +869,10 @@ function renderPedidosTable(vs){
   const isAdmin=STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido / Mensajero</th><th>Tipo</th><th>Cliente/Mesa</th><th>Total</th><th>Cobro</th><th>Cocina</th><th>Pedido</th><th>Domiciliario</th><th>Acciones</th></tr></thead><tbody>
   ${list.map(v=>{
-    // Admin/supervisor editan siempre. Cajero y mesero pueden editar mientras el pedido NO esté pagado.
+    // Admin/supervisor editan siempre. El CAJERO puede editar mientras el pedido NO esté pagado.
+    // El MESERO NO puede editar pedidos.
     const noPagado = v.estado!=='pagada';
-    const editable = isAdmin || noPagado;
+    const editable = STATE.user.rol!=='mesero' && STATE.user.rol!=='impresiones' && (isAdmin || noPagado);
     const abierta = v.estado==='abierta';
     const porVerificar = v.estado==='por_verificar';
     return `<tr ${abierta?'style="background:rgba(212,175,55,0.06)"':porVerificar?'style="background:rgba(52,152,219,0.08)"':''}>
@@ -901,6 +902,7 @@ function domiciliarioSelect(v){
 function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;DB.set('ventas',vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
 function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';DB.set('ventas',vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
 function editarPedido(id){
+  if(STATE.user.rol==='mesero' || STATE.user.rol==='impresiones'){ toast('Un mesero no puede editar pedidos. Avise al cajero.','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   STATE.editandoVenta=v; STATE.order=v.items.map(i=>({...i})); STATE.tipoPedido=v.tipo; STATE.mesa=v.mesa||'';
   STATE.cliNombre=v.cliNombre||''; STATE.cliTel=v.cliTel||''; STATE.cliDir=v.cliDir||''; STATE.cliBarrio=v.cliBarrio||'';
