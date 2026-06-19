@@ -812,16 +812,45 @@ function beep(freq=800,dur=200,vol=0.3){
   o.start(); g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur/1000); o.stop(ctx.currentTime+dur/1000);
   }catch(e){}
 }
-// Sonidos distintos por evento
-// Pedido nuevo: alarma FUERTE que suena 2 veces seguidas (para que la cocina escuche)
-function sonidoPedidoNuevo(){
-  const tanda = (t)=>{ setTimeout(()=>beep(880,220,0.95),t); setTimeout(()=>beep(1175,260,0.95),t+230); };
-  tanda(0);     // primera vez
-  tanda(620);   // segunda vez
+// Nota tipo CAMPANA (suave y musical, no de videojuego): tono principal + armónico brillante
+let _audioCtx=null;
+function campana(freq, t0, dur, vol){
+  try{
+    _audioCtx = _audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const ctx=_audioCtx; const now=ctx.currentTime+t0;
+    // tono fundamental
+    const o=ctx.createOscillator(), g=ctx.createGain();
+    o.type='triangle'; o.frequency.value=freq;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(vol, now+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0008, now+dur);
+    o.start(now); o.stop(now+dur+0.02);
+    // armónico (le da brillo de campana)
+    const o2=ctx.createOscillator(), g2=ctx.createGain();
+    o2.type='sine'; o2.frequency.value=freq*2.01;
+    o2.connect(g2); g2.connect(ctx.destination);
+    g2.gain.setValueAtTime(0, now);
+    g2.gain.linearRampToValueAtTime(vol*0.4, now+0.01);
+    g2.gain.exponentialRampToValueAtTime(0.0008, now+dur*0.7);
+    o2.start(now); o2.stop(now+dur*0.7+0.02);
+  }catch(e){}
 }
-function sonidoListo(){ beep(1000,150,0.6); setTimeout(()=>beep(1300,250,0.6),170); }
+// Pedido nuevo: timbre elegante (do-mi-sol ascendente, alegre), RÁPIDO, FUERTE y suena 2 veces
+function sonidoPedidoNuevo(){
+  const V=0.9;
+  const melodia = (t)=>{
+    campana(1047, t,      0.18, V);  // Do
+    campana(1319, t+0.10, 0.18, V);  // Mi
+    campana(1568, t+0.20, 0.30, V);  // Sol (un poco más largo)
+  };
+  melodia(0);      // primera vez
+  melodia(0.42);   // segunda vez, enseguida (más rápido)
+}
+// Sonidos distintos por evento
+function sonidoListo(){ campana(1319,0,0.2,0.7); campana(1760,0.12,0.3,0.7); } // campanita alegre
 function sonidoError(){ beep(250,300,0.5); }
-function sonidoExito(){ beep(900,100,0.5); setTimeout(()=>beep(1200,120,0.5),110); }
+function sonidoExito(){ campana(1047,0,0.15,0.6); campana(1568,0.09,0.2,0.6); }
 function notifyKitchen(){ sonidoPedidoNuevo(); }
 
 // ========================= PEDIDOS =========================
