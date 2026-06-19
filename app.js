@@ -1130,7 +1130,7 @@ function caja(){
     </div></div>
   <div class="card"><div class="card-title">${ic('i-orders')} Movimientos del Día</div>
     ${movs.length===0?`<p class="text-gray text-sm">Sin movimientos registrados</p>`:
-    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descripción</th><th>Usuario</th><th>Monto</th><th>Hora</th></tr></thead><tbody>${movs.slice().reverse().map(m=>`<tr><td>${movBadge(m.tipo)}</td><td>${escapeHtml(m.desc)}${m.empleado?'<br><span class="text-xs text-gray">'+escapeHtml(m.empleado)+'</span>':''}</td><td class="text-xs">${escapeHtml(m.usuario||'')}</td><td class="${m.tipo==='entrada'?'text-green':'text-red'}">${m.tipo==='entrada'?'+':'-'}${fmtMoney(m.monto)}</td><td class="text-xs text-gray">${fmtDate(m.fecha)}</td></tr>`).join('')}</tbody></table></div>`}
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descripción</th><th>Usuario</th><th>Monto</th><th>Hora</th>${STATE.user.rol==='admin'?'<th>Corregir</th>':''}</tr></thead><tbody>${movs.slice().reverse().map((m,ri)=>{ const realIdx=movs.length-1-ri; return `<tr><td>${movBadge(m.tipo)}</td><td>${escapeHtml(m.desc)}${m.empleado?'<br><span class="text-xs text-gray">'+escapeHtml(m.empleado)+'</span>':''}</td><td class="text-xs">${escapeHtml(m.usuario||'')}</td><td class="${m.tipo==='entrada'?'text-green':'text-red'}">${m.tipo==='entrada'?'+':'-'}${fmtMoney(m.monto)}</td><td class="text-xs text-gray">${fmtDate(m.fecha)}</td>${STATE.user.rol==='admin'?`<td style="display:flex;gap:5px;"><button class="btn btn-ghost btn-sm" onclick="editarMovimiento(${realIdx})" title="Editar">${ic('i-edit')}</button><button class="btn btn-danger btn-sm" onclick="eliminarMovimiento(${realIdx})" title="Eliminar">${ic('i-trash')}</button></td>`:''}</tr>`; }).join('')}</tbody></table></div>${STATE.user.rol==='admin'?'<p class="text-xs text-gray mt-1">Como administrador puede corregir o eliminar un movimiento si hubo un error. Queda registrado en auditoría.</p>':''}`}
   </div>`;
 }
 function propinasPorMesero(vs){
@@ -1154,10 +1154,43 @@ function saveRetiro(){
   if(monto<=0){ toast('Ingrese un monto válido','error'); return; }
   const c=DB.get('caja_actual'); if(!c){ toast('No hay caja abierta','error'); closeModal('modal-retiro'); return; }
   if(!Array.isArray(c.movimientos)) c.movimientos=[];
-  c.movimientos.push({tipo:'retiro',monto,desc:motivo||'Retiro de efectivo',usuario:STATE.user.nombre,fecha:now()});
+  c.movimientos.push({id:uid(),tipo:'retiro',monto,desc:motivo||'Retiro de efectivo',usuario:STATE.user.nombre,fecha:now()});
   DB.set('caja_actual',c);
   logAudit('Retiro de efectivo',`${fmtMoney(monto)} - ${motivo} (por ${STATE.user.nombre})`);
   closeModal('modal-retiro'); toast('Retiro registrado','success'); showPage('caja');
+}
+function eliminarMovimiento(idx){
+  if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede corregir movimientos','error'); return; }
+  const c=DB.get('caja_actual'); if(!c||!Array.isArray(c.movimientos)) return;
+  const m=c.movimientos[idx]; if(!m) return;
+  if(!confirm(`¿Eliminar este movimiento?\n\n${m.tipo.toUpperCase()}: ${fmtMoney(m.monto)}\n${m.desc||''}\n\nEsto corrige el cuadre de caja. Quedará en auditoría.`)) return;
+  c.movimientos.splice(idx,1);
+  DB.set('caja_actual',c);
+  logAudit('Eliminó movimiento (corrección)',`${m.tipo} ${fmtMoney(m.monto)} - ${m.desc||''} (por ${STATE.user.nombre})`);
+  toast('Movimiento eliminado','success'); showPage('caja');
+}
+let editMovIdx=null;
+function editarMovimiento(idx){
+  if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede corregir movimientos','error'); return; }
+  const c=DB.get('caja_actual'); if(!c||!Array.isArray(c.movimientos)) return;
+  const m=c.movimientos[idx]; if(!m) return;
+  editMovIdx=idx;
+  document.getElementById('editmov-monto').value=m.monto;
+  document.getElementById('editmov-desc').value=m.desc||'';
+  openModal('modal-editmov');
+}
+function saveEditMovimiento(){
+  if(STATE.user.rol!=='admin') return;
+  const c=DB.get('caja_actual'); if(!c||!Array.isArray(c.movimientos)) return;
+  const m=c.movimientos[editMovIdx]; if(!m){ closeModal('modal-editmov'); return; }
+  const nuevoMonto=parseFloat(document.getElementById('editmov-monto').value)||0;
+  const nuevaDesc=document.getElementById('editmov-desc').value.trim();
+  if(nuevoMonto<=0){ toast('Monto inválido','error'); return; }
+  const antes=`${fmtMoney(m.monto)} - ${m.desc||''}`;
+  m.monto=nuevoMonto; m.desc=nuevaDesc||m.desc; m.editadoPor=STATE.user.nombre; m.editadoEn=now();
+  DB.set('caja_actual',c);
+  logAudit('Editó movimiento (corrección)',`Antes: ${antes} → Ahora: ${fmtMoney(nuevoMonto)} - ${nuevaDesc} (por ${STATE.user.nombre})`);
+  closeModal('modal-editmov'); toast('Movimiento corregido','success'); showPage('caja');
 }
 function saveMovimiento(){
   const tipo=document.getElementById('mov-tipo').value;
@@ -1167,7 +1200,7 @@ function saveMovimiento(){
   if(monto<=0){ toast('Ingrese un monto válido','error'); return; }
   const c=DB.get('caja_actual'); if(!c){ toast('No hay caja abierta','error'); closeModal('modal-movimiento'); return; }
   if(!Array.isArray(c.movimientos)) c.movimientos=[];
-  c.movimientos.push({tipo,monto,desc:desc||(tipo==='nomina'?'Pago de nómina':tipo),empleado,usuario:STATE.user.nombre,fecha:now()});
+  c.movimientos.push({id:uid(),tipo,monto,desc:desc||(tipo==='nomina'?'Pago de nómina':tipo),empleado,usuario:STATE.user.nombre,fecha:now()});
   DB.set('caja_actual',c);
   logAudit('Registró '+tipo,`${fmtMoney(monto)} - ${desc} ${empleado?'('+empleado+')':''}`);
   // limpiar campos
@@ -2003,6 +2036,7 @@ function buildModals(){
 
   <div id="modal-movimiento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Gasto / Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-movimiento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="mov-tipo" onchange="toggleEmpleadoField()"><option value="nomina">Pago de Nómina / Empleado</option><option value="gasto">Gasto Menor</option><option value="salida">Salida</option><option value="entrada">Entrada</option></select></div><div class="form-group" id="mov-empleado-wrap"><label>Empleado</label><input type="text" id="mov-empleado" placeholder="Nombre del empleado"></div><div class="form-group"><label>Monto (COP)</label><input type="number" id="mov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="mov-desc" placeholder="Detalle del movimiento"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-movimiento')">Cancelar</button><button class="btn btn-gold" onclick="saveMovimiento()">Registrar</button></div></div></div>
 
+  <div id="modal-editmov" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-edit')} Corregir Movimiento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-editmov')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2">Corrige el monto o la descripción si hubo un error al registrar. Queda en auditoría.</p><div class="form-group"><label>Monto (COP)</label><input type="number" id="editmov-monto" placeholder="0"></div><div class="form-group"><label>Descripción</label><input type="text" id="editmov-desc" placeholder="Detalle"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-editmov')">Cancelar</button><button class="btn btn-gold" onclick="saveEditMovimiento()">${ic('i-check')} Guardar Corrección</button></div></div></div>
   <div id="modal-retiro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-money-out')} Retiro de Efectivo</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-retiro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2">Retiro oficial del efectivo (ej: los dueños retiran las ventas del día). No genera faltante: el sistema lo reconoce como salida autorizada.</p><div class="form-group"><label>Monto a retirar (COP)</label><input type="number" id="ret-monto" placeholder="0"></div><div class="form-group"><label>Motivo</label><input type="text" id="ret-motivo" placeholder="Ej: retiro ventas del día"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-retiro')">Cancelar</button><button class="btn btn-gold" onclick="saveRetiro()">${ic('i-check')} Registrar Retiro</button></div></div></div>
 
   <div id="modal-cliente" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-cli-title">${ic('i-delivery')} Nuevo Cliente</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cliente')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-cli-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="c-nombre"></div><div class="form-group"><label>Teléfono</label><input type="text" id="c-tel"></div><div class="form-group" style="grid-column:1/-1"><label>Dirección</label><input type="text" id="c-dir"></div><div class="form-group"><label>Barrio</label><input type="text" id="c-barrio"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cliente')">Cancelar</button><button class="btn btn-gold" onclick="saveCliente()">Guardar</button></div></div></div>
