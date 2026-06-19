@@ -75,6 +75,7 @@ function initData(){
     {id:'u2',nombre:'Carlos Cajero',usuario:'cajero1',pass:'caja123',rol:'cajero',activo:true,creado:now()},
     {id:'u3',nombre:'Cocina',usuario:'cocina',pass:'cocina123',rol:'cocina',activo:true,creado:now()},
     {id:'u4',nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()},
+    {id:'u5',nombre:'Impresiones',usuario:'impresiones',pass:'impresiones123',rol:'impresiones',activo:true,creado:now()},
   ]);
   if(!DB.get('productos')) DB.set('productos',[
     {id:'p1',nombre:'Rollos Primavera',precio:10000,cat:'Entremeses',activo:true},
@@ -110,6 +111,9 @@ function initData(){
     const bio=us.find(u=>u.usuario==='biometria');
     if(!bio){ us.push({id:uid(),nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()}); ch=true; }
     else if(bio.rol!=='biometria'){ bio.rol='biometria'; ch=true; }
+    const imp=us.find(u=>u.usuario==='impresiones');
+    if(!imp){ us.push({id:uid(),nombre:'Impresiones',usuario:'impresiones',pass:'impresiones123',rol:'impresiones',activo:true,creado:now()}); ch=true; }
+    else if(imp.rol!=='impresiones'){ imp.rol='impresiones'; ch=true; }
     if(ch) DB.set('usuarios',us);
   })();
   if(!DB.get('config')) DB.set('config',{
@@ -154,7 +158,7 @@ function doLogin(){
     if(img){ img.src=logoSb; img.style.display='block'; } if(fb) fb.style.display='none'; }
   buildSidebar();
   logAudit('Inicio de sesión');
-  const landing = user.rol==='cocina'?'cocina' : (user.rol==='mesero')?'ventas' : (user.rol==='cajero')?'caja' : 'dashboard';
+  const landing = user.rol==='cocina'?'cocina' : (user.rol==='mesero')?'ventas' : (user.rol==='cajero')?'caja' : (user.rol==='impresiones')?'impresiones' : 'dashboard';
   showPage(landing);
 }
 function doLogout(){
@@ -229,14 +233,14 @@ const NAV = [
   {sec:'Principal'},
   {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor']},
   {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero']},
-  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero'],badge:'activos'},
+  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones'],badge:'activos'},
   {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero'],badge:'listos'},
   {sec:'Operaciones'},
   {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor']},
   {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero']},
   {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor'],badge:'cocina'},
   {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina']},
-  {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor']},
+  {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor','impresiones']},
   {sec:'Gestión'},
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor']},
@@ -736,6 +740,7 @@ function facturaHTML(v){
       ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
       ${v.cliTel?`<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${escapeHtml(v.cliTel)}</span></div>`:''}
       ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección:</span><span>${escapeHtml(v.cliDir)}</span></div>`:''}
+      ${esDom&&v.cliBarrio?`<div style="display:flex;justify-content:space-between;"><span>Barrio:</span><span>${escapeHtml(v.cliBarrio)}</span></div>`:''}
       ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero:</span><span>${escapeHtml(v.domiciliario)}</span></div>`:''}
       <div style="display:flex;justify-content:space-between;"><span>Atendió:</span><span>${escapeHtml(v.cajero||'')}</span></div>
     </div>
@@ -801,17 +806,22 @@ function printTicketCocina(v){
 }
 
 // ========================= NOTIFICACIÓN COCINA (SONIDO) =========================
-function beep(freq=800,dur=200){
+function beep(freq=800,dur=200,vol=0.3){
   try{ const ctx=new (window.AudioContext||window.webkitAudioContext)(); const o=ctx.createOscillator(),g=ctx.createGain();
-  o.connect(g); g.connect(ctx.destination); o.frequency.value=freq; o.type='sine'; g.gain.setValueAtTime(0.3,ctx.currentTime);
+  o.connect(g); g.connect(ctx.destination); o.frequency.value=freq; o.type='square'; g.gain.setValueAtTime(Math.min(1,vol),ctx.currentTime);
   o.start(); g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur/1000); o.stop(ctx.currentTime+dur/1000);
   }catch(e){}
 }
 // Sonidos distintos por evento
-function sonidoPedidoNuevo(){ beep(700,120); setTimeout(()=>beep(900,180),140); } // dos tonos ascendentes
-function sonidoListo(){ beep(1000,150); setTimeout(()=>beep(1300,250),170); }      // campanita alegre
-function sonidoError(){ beep(250,300); }                                            // tono grave
-function sonidoExito(){ beep(900,100); setTimeout(()=>beep(1200,120),110); }        // confirmación
+// Pedido nuevo: alarma FUERTE que suena 2 veces seguidas (para que la cocina escuche)
+function sonidoPedidoNuevo(){
+  const tanda = (t)=>{ setTimeout(()=>beep(880,220,0.95),t); setTimeout(()=>beep(1175,260,0.95),t+230); };
+  tanda(0);     // primera vez
+  tanda(620);   // segunda vez
+}
+function sonidoListo(){ beep(1000,150,0.6); setTimeout(()=>beep(1300,250,0.6),170); }
+function sonidoError(){ beep(250,300,0.5); }
+function sonidoExito(){ beep(900,100,0.5); setTimeout(()=>beep(1200,120,0.5),110); }
 function notifyKitchen(){ sonidoPedidoNuevo(); }
 
 // ========================= PEDIDOS =========================
@@ -842,7 +852,7 @@ function renderPedidosTable(vs){
     <td><select onchange="setEstadoPedido('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="activo" ${v.estadoPedido==='activo'?'selected':''}>Activo</option><option value="entregado" ${v.estadoPedido==='entregado'?'selected':''}>Entregado</option></select></td>
     <td>${v.tipo==='domicilio'?domiciliarioSelect(v):'—'}</td>
     <td style="display:flex;gap:5px;flex-wrap:wrap;">
-      ${abierta?`<button class="btn btn-success btn-sm" onclick="abrirCobroMesa('${v.id}')" title="Cobrar y cerrar">${ic('i-cash')} Cobrar</button>`:''}
+      ${abierta && STATE.user.rol!=='mesero' && STATE.user.rol!=='impresiones'?`<button class="btn btn-success btn-sm" onclick="abrirCobroMesa('${v.id}')" title="Cobrar y cerrar">${ic('i-cash')} Cobrar</button>`:''}
       ${porVerificar?`<button class="btn btn-primary btn-sm" onclick="verificarPago('${v.id}')" title="Verificar comprobante">${ic('i-check')} Verificar</button>`:''}
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
@@ -868,6 +878,7 @@ function editarPedido(id){
 
 let cobrandoMesaId=null, cobroBaseTotal=0, cobroTotalCliente=0;
 function abrirCobroMesa(id){
+  if(STATE.user.rol==='mesero' || STATE.user.rol==='impresiones'){ toast('Este usuario no puede cobrar. El cajero realiza el cobro.','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   cobrandoMesaId=id; cobroBaseTotal=v.total;
   const ref = v.tipo==='mesa'?v.mesa : (v.cliNombre||refCocina(v));
@@ -989,9 +1000,14 @@ function listos(){
 }
 
 // ========================= COCINA (KDS) =========================
+let ultimoCountCocina=-1;
 function cocina(){
   const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='entregado')
     .sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  // Detectar pedido NUEVO: si hay más pedidos que antes, sonar alarma fuerte
+  const pendientes=vs.filter(v=>v.estadoCocina==='pendiente'||v.estadoCocina==='preparando').length;
+  if(ultimoCountCocina>=0 && pendientes>ultimoCountCocina){ try{ sonidoPedidoNuevo(); }catch(e){} }
+  ultimoCountCocina=pendientes;
   return `<div><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-chef')} Pantalla de Cocina</div>
     <span class="badge badge-blue">Ordenado por tiempo de espera · Sin precios</span></div>
     <div id="kds-container">${renderKDS(vs)}</div></div>`;
@@ -1619,6 +1635,7 @@ function impresiones(){
     </div>
   </div>
   ${!autoOn?`<div class="card" style="border:1px solid var(--orange);"><p class="text-sm" style="color:var(--orange);margin:0;">${ic('i-warning')} La impresión automática está apagada. Actívala arriba para que los pedidos se impriman solos en este computador.</p></div>`:''}
+  ${colaImpr.length>0?`<div class="card" style="border:1px solid var(--gold);"><p class="text-sm" style="margin:0;">${ic('i-clock')} <strong>${colaImpr.length}</strong> impresión(es) en cola, esperando turno...</p></div>`:''}
   <div class="card">
     <div class="card-title">${ic('i-clock')} Pedidos recientes</div>
     ${lista.length===0?`<p class="text-gray" style="text-align:center;padding:20px;">No hay pedidos recientes. Cuando un mesero tome un pedido, aparecerá aquí y se imprimirá solo.</p>`:`
@@ -1656,26 +1673,50 @@ function toggleImprAuto(on){
   }
   showPage('impresiones');
 }
-let procesandoImpr=false;
+// ====== COLA DE IMPRESIÓN REAL (no pierde trabajos) ======
+let colaImpr=[];           // fila de trabajos por imprimir, en orden
+let colaImprActiva=false;  // si hay una impresión en curso
+const colaImprIds=new Set(); // para no encolar dos veces lo mismo
+
 function procesarImpresionesPendientes(){
-  if(!imprAutoActiva() || procesandoImpr) return;
+  if(!imprAutoActiva()) return;
   const vs=DB.get('ventas')||[];
-  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30; // solo últimos 30 min
-  // Buscar UNA cosa pendiente por pasada (para imprimir de a una, en orden)
-  let trabajo=null;
-  for(const v of [...vs].reverse()){ // del más viejo al más nuevo = en orden
-    if(v.estado==='anulada' || !reciente(v)) continue;
-    if(!v.ticketImpreso){ trabajo={v,tipo:'ticket'}; break; }
-    if(v.estado==='pagada' && !v.facturaImpresa){ trabajo={v,tipo:'factura'}; break; }
-  }
-  if(!trabajo) return;
-  procesandoImpr=true;
-  const html = trabajo.tipo==='ticket'? ticketCocinaHTML(trabajo.v) : facturaHTML(trabajo.v);
-  imprimirNavegador(html);
-  // Marcar como impreso
-  const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===trabajo.v.id);
-  if(t){ if(trabajo.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpreso=true; if(trabajo.tipo==='factura') t.facturaImpresa=true; DB.set('ventas',all); }
-  setTimeout(()=>{ procesandoImpr=false; }, 2500); // pausa entre impresiones
+  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30; // últimos 30 min
+  // Recorrer del más viejo al más nuevo para mantener el ORDEN de llegada
+  const ordenados=[...vs].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  ordenados.forEach(v=>{
+    if(v.estado==='anulada' || !reciente(v)) return;
+    // Comanda de cocina pendiente
+    if(!v.ticketImpreso){
+      const key='ticket-'+v.id;
+      if(!colaImprIds.has(key)){ colaImprIds.add(key); colaImpr.push({id:v.id,tipo:'ticket',key}); }
+    }
+    // Factura pendiente (solo si está pagada)
+    if(v.estado==='pagada' && !v.facturaImpresa){
+      const key='factura-'+v.id;
+      if(!colaImprIds.has(key)){ colaImprIds.add(key); colaImpr.push({id:v.id,tipo:'factura',key}); }
+    }
+  });
+  arrancarColaImpr();
+}
+function arrancarColaImpr(){
+  if(colaImprActiva) return;          // ya hay una imprimiendo
+  if(colaImpr.length===0) return;     // nada que imprimir
+  colaImprActiva=true;
+  const job=colaImpr.shift();
+  const v=(DB.get('ventas')||[]).find(x=>x.id===job.id);
+  if(!v){ colaImprActiva=false; colaImprIds.delete(job.key); arrancarColaImpr(); return; }
+  const html = job.tipo==='ticket'? ticketCocinaHTML(v) : facturaHTML(v);
+  // Marcar como impreso ANTES de imprimir (para no perder el rastro aunque falle el navegador)
+  const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===job.id);
+  if(t){ if(job.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; DB.set('ventas',all); }
+  try{ imprimirNavegador(html); }catch(e){ console.warn('Impr error',e); }
+  // Esperar a que termine antes de la siguiente (evita que se solapen y se pierdan)
+  setTimeout(()=>{
+    colaImprIds.delete(job.key);
+    colaImprActiva=false;
+    arrancarColaImpr(); // siguiente de la cola
+  }, 3000);
 }
 function reimprimirComanda(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
