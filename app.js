@@ -51,12 +51,30 @@ function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
-// Efectivo que de verdad queda en caja por una venta en efectivo:
-// venta real + domicilio + recargo. NO incluye propina (se la lleva el mesero al instante).
+// Efectivo que de verdad queda en caja por una venta.
+// Si hubo pago dividido (v.pagos), cuenta la parte en efectivo.
+// La propina NO queda en caja (se la lleva el mesero), así que se descuenta del efectivo.
 function efectivoEnCajaDe(v){
-  if(v.metodo!=='efectivo') return 0;
-  const venta = v.ventaReal!==undefined?v.ventaReal:v.total;
-  return venta + (v.valorDom||0) + (v.recargo||0);
+  if(v.estado!=='pagada') return 0;
+  let efectivo=0;
+  if(v.pagos && typeof v.pagos==='object'){
+    efectivo = v.pagos.efectivo||0;
+  } else if(v.metodo==='efectivo'){
+    efectivo = (v.totalCobrado!==undefined?v.totalCobrado:v.total);
+  } else {
+    return 0;
+  }
+  // La propina se le entrega al mesero, no permanece en caja.
+  // Si el total cobrado se pagó en efectivo, la propina salió de ahí.
+  const propina = v.propina||0;
+  efectivo = Math.max(0, efectivo - propina);
+  return efectivo;
+}
+// Cuánto se pagó de una venta con un método específico (respeta pago dividido)
+function montoPorMetodoDe(v, metodo){
+  if(v.estado!=='pagada') return 0;
+  if(v.pagos && typeof v.pagos==='object'){ return v.pagos[metodo]||0; }
+  return v.metodo===metodo ? (v.totalCobrado!==undefined?v.totalCobrado:v.total) : 0;
 }
 // Métodos de pago del sistema (centralizados)
 const METODOS_PAGO = [['efectivo','Efectivo'],['banco','Banco'],['tarjeta','Tarjeta'],['llave','Llave']];
@@ -1162,9 +1180,9 @@ function caja(){
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  // Ingresos reales por método (solo venta real, sin propina/domicilio/recargo)
+  // Ingresos reales por método (respeta pago dividido)
   const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=0);
-  vs.forEach(v=>{ if(porMetodo[v.metodo]!==undefined) porMetodo[v.metodo]+=(v.ventaReal!==undefined?v.ventaReal:v.total); });
+  vs.forEach(v=>{ METODOS_PAGO.forEach(([k])=>{ porMetodo[k]+=montoPorMetodoDe(v,k); }); });
   const totalV=Object.values(porMetodo).reduce((a,b)=>a+b,0);
   // Conceptos que NO son ingreso del negocio
   const totalPropinas=vs.reduce((a,v)=>a+(v.propina||0),0);
@@ -1354,7 +1372,7 @@ function confirmarCierre(){
   if(isNaN(contado)){ toast('Ingrese el efectivo contado','error'); return; }
   const obs=document.getElementById('cierre-obs').value;
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=vs.filter(v=>v.metodo===k).reduce((a,v)=>a+(v.ventaReal!==undefined?v.ventaReal:v.total),0));
+  const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=vs.reduce((a,v)=>a+montoPorMetodoDe(v,k),0));
   const totalVentas=Object.values(porMetodo).reduce((a,b)=>a+b,0);
   const propinas=vs.reduce((a,v)=>a+(v.propina||0),0);
   const domicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
