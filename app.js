@@ -21,7 +21,11 @@ function ahoraMs(){ return Date.now() + SERVER_OFFSET; }
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleDateString('es-CO')+' '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}); }
 function fmtMoney(n){ return '$ '+(Math.round(n)||0).toLocaleString('es-CO'); }
 function uid(){ return '_'+Math.random().toString(36).substr(2,9); }
-function today(){ return new Date().toISOString().split('T')[0]; }
+// today() usa el MISMO instante y formato que now() (la fecha ISO del servidor),
+// así el filtro "de hoy" coincide exactamente con la fecha guardada en cada pedido.
+function today(){ return new Date(Date.now() + SERVER_OFFSET).toISOString().split('T')[0]; }
+// ¿La venta es del mismo "día de operación"? Compara la parte de fecha (YYYY-MM-DD) del ISO.
+function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
@@ -394,7 +398,12 @@ function ventas(){
   </div>
   <datalist id="clientes-list">${clientes.map(c=>`<option value="${escapeHtml(c.nombre)}" data-id="${c.id}">`).join('')}</datalist>`;
 }
-function menuCard(p){ return `<div class="menu-item-card" onclick="addToOrder('${p.id}')"><div class="item-ic">${ic('i-menu-food')}</div><div class="item-name">${escapeHtml(p.nombre)}</div><div class="item-price">${fmtMoney(p.precio)}</div></div>`; }
+function menuCard(p){
+  if(p.agotado){
+    return `<div class="menu-item-card" style="opacity:0.5;cursor:not-allowed;position:relative;" onclick="toast('${escapeHtml(p.nombre)} está AGOTADO hoy','error')"><div class="item-ic">${ic('i-menu-food')}</div><div class="item-name">${escapeHtml(p.nombre)}</div><div class="item-price" style="color:var(--red-light);font-weight:bold;">AGOTADO</div></div>`;
+  }
+  return `<div class="menu-item-card" onclick="addToOrder('${p.id}')"><div class="item-ic">${ic('i-menu-food')}</div><div class="item-name">${escapeHtml(p.nombre)}</div><div class="item-price">${fmtMoney(p.precio)}</div></div>`;
+}
 
 let currentCat='Todos';
 function setCat(c,el){ currentCat=c; document.querySelectorAll('.cat-tab').forEach(t=>t.classList.remove('active')); el.classList.add('active'); filterMenu(); }
@@ -443,6 +452,7 @@ function autoFillCliente(nombre){
 
 function addToOrder(id){
   const p=(DB.get('productos')||[]).find(x=>x.id===id); if(!p) return;
+  if(p.agotado){ toast(`${p.nombre} está AGOTADO hoy`,'error'); return; }
   const e=STATE.order.find(x=>x.id===id);
   if(e) e.qty++; else STATE.order.push({id,nombre:p.nombre,precio:p.precio,qty:1,obs:''});
   renderOrderPanel();
@@ -762,6 +772,7 @@ function facturaHTML(v){
       <span>TOTAL</span><span>${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
     </div>
     <div style="text-align:center;font-size:14px;font-weight:bold;margin-top:5px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
+    ${v.obs?`<div style="border-top:1px dashed #000;margin-top:8px;padding-top:6px;font-size:13px;"><strong>Observación:</strong> ${escapeHtml(v.obs)}</div>`:''}
     <div style="text-align:center;margin-top:12px;font-size:15px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
     <div style="text-align:center;font-size:14px;color:#333;margin-top:4px;font-weight:bold;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
@@ -856,11 +867,17 @@ function notifyKitchen(){ sonidoPedidoNuevo(); }
 
 // ========================= PEDIDOS =========================
 function pedidos(){
-  const t=today();
-  // Solo pedidos de HOY (los del día anterior no aparecen, para no generar desorden).
-  // Excepción: pedidos abiertos/por verificar de días anteriores siguen visibles (no se pueden perder sin cobrar).
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada' && (v.fecha?.startsWith(t) || v.estado==='abierta' || v.estado==='por_verificar'));
-  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-orders')} Pedidos <span class="text-sm text-gray" style="font-weight:normal;">(de hoy)</span></div>
+  // Los pedidos se reinician con la CAJA: solo se ven los de la caja abierta actualmente.
+  // Al cerrar caja y abrir una nueva, empieza limpio (sin los pedidos de la caja anterior).
+  // Excepción de seguridad: los abiertos/por verificar SIEMPRE se ven (nunca se pierde uno sin cobrar).
+  const cajaActual=DB.get('caja_actual');
+  const cajaId=cajaActual?cajaActual.id:null;
+  const vs=(DB.get('ventas')||[]).filter(v=>{
+    if(v.estado==='anulada') return false;
+    if(v.estado==='abierta' || v.estado==='por_verificar') return true; // nunca ocultar sin cobrar
+    return cajaId && v.cajaId===cajaId; // solo los de la caja abierta ahora
+  });
+  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-orders')} Pedidos <span class="text-sm text-gray" style="font-weight:normal;">(caja actual)</span></div>
     <div style="display:flex;gap:8px;"><div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="ped-q" placeholder="Factura, cliente, teléfono..." value="${escapeHtml(STATE.pedQ||'')}" oninput="STATE.pedQ=this.value;document.getElementById('ped-table-wrap').innerHTML=renderPedidosTable(window.__pedlist||[])" style="padding-left:34px;width:240px;"></div>
     <button class="btn btn-primary btn-sm" onclick="showPage('ventas')">${ic('i-plus')} Nueva</button></div></div>
     <div id="ped-table-wrap">${renderPedidosTable(vs)}</div></div>`;
@@ -889,7 +906,7 @@ function renderPedidosTable(vs){
     <td>${escapeHtml(v.cliNombre||v.mesa||'—')}${v.cliTel?`<br><span class="text-xs text-gray">${escapeHtml(v.cliTel)}</span>`:''}</td>
     <td class="font-bold">${fmtMoney(v.total)}</td>
     <td>${abierta?'<span class="badge badge-orange">Abierta</span>':porVerificar?'<span class="badge badge-blue">Por verificar</span>':'<span class="badge badge-green">Pagada</span>'}</td>
-    <td>${cocinaBadge(v.estadoCocina)}</td>
+    <td>${cocinaBadge(v.estadoCocina)}${v.llamadoMesero&&v.estadoPedido!=='entregado'?'<br><span class="badge badge-gold" style="margin-top:3px;">🔔 Listo - recoger</span>':''}</td>
     <td><select onchange="setEstadoPedido('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="activo" ${v.estadoPedido==='activo'?'selected':''}>Activo</option><option value="entregado" ${v.estadoPedido==='entregado'?'selected':''}>Entregado</option></select></td>
     <td>${v.tipo==='domicilio'?domiciliarioSelect(v):'—'}</td>
     <td style="display:flex;gap:5px;flex-wrap:wrap;">
@@ -1020,15 +1037,18 @@ function anularVenta(id){
     DB.set('ventas',(DB.get('ventas')||[]).filter(x=>x.id!==id));
     toast('Domicilio eliminado','error'); showPage('pedidos'); return;
   }
-  if(!confirm('¿Anular esta venta? Quedará registrada como anulada en el historial y auditoría.')) return;
-  const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id); if(t){t.estado='anulada';DB.set('ventas',vs);logAudit('Anuló venta',t.factura);}
-  toast('Venta anulada','error'); showPage('pedidos');
+  if(!confirm('¿Anular esta venta? Quedará registrada como ANULADA en el historial y auditoría (no se borra, queda el rastro).')) return;
+  const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
+  if(t){ t.estado='anulada'; t.anuladoPor=STATE.user.nombre; t.anuladoEn=now(); DB.set('ventas',vs); logAudit('Anuló venta',`${t.factura||refPedido(t)} por ${STATE.user.nombre}`); }
+  toast('Venta anulada (queda en historial)','error'); showPage('pedidos');
 }
 function eliminarDefinitivo(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  if(!confirm('⚠ ADVERTENCIA: Esta acción eliminará PERMANENTEMENTE el domicilio.\n\nSe borrará de: ventas, historial, reportes, caja y estadísticas. No quedará ningún rastro en el sistema. NO se puede deshacer.\n\n¿Continuar?')) return;
+  if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede eliminar definitivamente','error'); return; }
+  if(!confirm('⚠ ADVERTENCIA: Esta acción eliminará PERMANENTEMENTE el pedido.\n\nSe borrará de: ventas, historial, reportes, caja y estadísticas. Quedará SOLO un registro en auditoría de que usted lo borró. NO se puede deshacer.\n\n¿Continuar?')) return;
+  logAudit('Eliminó pedido DEFINITIVAMENTE',`${v.factura||v.cliNombre||refPedido(v)} - ${fmtMoney(v.total)} por ${STATE.user.nombre}`);
   DB.set('ventas',(DB.get('ventas')||[]).filter(x=>x.id!==id));
-  toast('Domicilio eliminado permanentemente','error'); showPage('pedidos');
+  toast('Pedido eliminado permanentemente','error'); showPage('pedidos');
 }
 function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(v){logAudit('Reimprimió factura',v.factura);printFactura(v);} }
 
@@ -1073,7 +1093,16 @@ function renderKDS(vs){
       <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
         ${v.estadoCocina!=='preparando'&&v.estadoCocina!=='listo'?`<button class="btn btn-primary btn-sm" onclick="setEstadoCocina('${v.id}','preparando')">${ic('i-chef')} Preparando</button>`:''}
         ${v.estadoCocina!=='listo'?`<button class="btn btn-success btn-sm" onclick="setEstadoCocina('${v.id}','listo')">${ic('i-check')} Listo</button>`:`<span class="badge badge-green">${ic('i-check')} Listo</span>`}
+        ${v.estadoCocina==='listo'?`<button class="btn btn-gold btn-sm" onclick="llamarMesero('${v.id}')">${ic('i-bell')} Llamar mesero</button>`:''}
       </div></div>`;}).join('')}</div>`;
+}
+function llamarMesero(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  // Marca un aviso que verán cajero/meseros, y suena alarma
+  const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
+  if(t){ t.llamadoMesero=true; t.llamadoEn=now(); DB.set('ventas',vs); }
+  try{ sonidoListo(); }catch(e){}
+  toast(`Avisando: ${refCocina(v)} está listo para entregar`,'success');
 }
 function setEstadoCocina(id,e){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id);
@@ -1483,6 +1512,16 @@ function reportes(){
   const totalHaceSemana=vs.filter(v=>v.fecha?.startsWith(haceSemana)&&esPagada(v)).reduce((a,v)=>a+v.total,0);
   const difSemana=totalHaceSemana>0?((hoyTotal-totalHaceSemana)/totalHaceSemana*100):0;
 
+  // ----- RESUMEN DEL DÍA: propinas (repartidas entre meseros) y platos del día -----
+  const propinasHoy=hoy.reduce((a,v)=>a+(v.propina||0),0);
+  const meseros=(DB.get('usuarios')||[]).filter(u=>u.rol==='mesero').map(u=>u.nombre);
+  const numMeseros=meseros.length||1;
+  const propinaPorMesero=propinasHoy/numMeseros;
+  const itemsHoy={}; hoy.forEach(v=>v.items?.forEach(i=>{ if(!itemsHoy[i.nombre])itemsHoy[i.nombre]=0; itemsHoy[i.nombre]+=i.qty; }));
+  const topHoy=Object.entries(itemsHoy).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const domiciliosHoy=hoy.filter(v=>v.tipo==='domicilio').length;
+  const recargosHoy=hoy.reduce((a,v)=>a+(v.recargo||0),0);
+
   // ----- ALERTAS -----
   const alertas=[];
   const cierres=DB.get('cierres')||[];
@@ -1495,6 +1534,28 @@ function reportes(){
     <div class="card-title text-red">${ic('i-warning')} Alertas</div>
     ${alertas.map(a=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;">${ic('i-warning')} ${escapeHtml(a.txt)}</div>`).join('')}
   </div>`:''}
+
+  <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
+    <div class="card-title">${ic('i-report')} Resumen del Día (Hoy)</div>
+    <div class="stats-grid" style="margin-bottom:12px;">
+      <div class="stat-card green"><div class="stat-label">Vendido hoy</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} ventas</div></div>
+      <div class="stat-card gold"><div class="stat-label">Propinas del día</div><div class="stat-value">${fmtMoney(propinasHoy)}</div><div class="stat-sub">para los meseros</div></div>
+      <div class="stat-card blue"><div class="stat-label">Domicilios</div><div class="stat-value">${domiciliosHoy}</div><div class="stat-sub">recargos: ${fmtMoney(recargosHoy)}</div></div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <p class="text-sm font-bold text-gold mb-1">${ic('i-cash')} Propinas a repartir (entre ${numMeseros} mesero${numMeseros!==1?'s':''})</p>
+        ${propinasHoy>0?`<div style="padding:10px;background:rgba(46,204,113,0.08);border-radius:8px;">
+          <div class="flex-between" style="font-size:15px;font-weight:bold;"><span>A cada mesero le toca:</span><span class="text-gold">${fmtMoney(propinaPorMesero)}</span></div>
+          ${meseros.length>0?`<div class="text-xs text-gray mt-1">${meseros.map(m=>escapeHtml(m)).join(' · ')}</div>`:''}
+        </div>`:`<p class="text-sm text-gray">No hay propinas registradas hoy.</p>`}
+      </div>
+      <div>
+        <p class="text-sm font-bold text-gold mb-1">${ic('i-chef')} Platos más pedidos hoy</p>
+        ${topHoy.length>0?`<table class="data-table" style="font-size:13px;"><tbody>${topHoy.map(([n,q])=>`<tr><td>${escapeHtml(n)}</td><td class="text-gold font-bold" style="text-align:right;">${q}</td></tr>`).join('')}</tbody></table>`:`<p class="text-sm text-gray">Aún no hay ventas hoy.</p>`}
+      </div>
+    </div>
+  </div>
 
   <div class="stats-grid">
     <div class="stat-card green"><div class="stat-label">Ventas Hoy</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} transacciones</div></div>
@@ -1570,6 +1631,11 @@ function saveProducto(){
   closeModal('modal-producto'); toast('Producto guardado','success'); showPage('menu');
 }
 function toggleProducto(id){ const ps=DB.get('productos')||[]; const p=ps.find(x=>x.id===id); if(p){p.activo=!p.activo;DB.set('productos',ps);} showPage('menu'); }
+function toggleAgotado(id){
+  const ps=DB.get('productos')||[]; const p=ps.find(x=>x.id===id);
+  if(p){ p.agotado=!p.agotado; DB.set('productos',ps); logAudit(p.agotado?'Marcó agotado':'Marcó disponible',p.nombre); toast(p.agotado?`${p.nombre} marcado AGOTADO`:`${p.nombre} disponible de nuevo`, p.agotado?'error':'success'); }
+  showPage('menu');
+}
 
 // ========================= CONFIGURACIÓN =========================
 function config(){
