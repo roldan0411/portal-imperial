@@ -856,23 +856,31 @@ function notifyKitchen(){ sonidoPedidoNuevo(); }
 
 // ========================= PEDIDOS =========================
 function pedidos(){
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada');
-  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-orders')} Pedidos</div>
-    <div style="display:flex;gap:8px;"><div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="ped-q" placeholder="Factura, cliente, teléfono..." oninput="showPage('pedidos')" style="padding-left:34px;width:240px;"></div>
+  const t=today();
+  // Solo pedidos de HOY (los del día anterior no aparecen, para no generar desorden).
+  // Excepción: pedidos abiertos/por verificar de días anteriores siguen visibles (no se pueden perder sin cobrar).
+  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada' && (v.fecha?.startsWith(t) || v.estado==='abierta' || v.estado==='por_verificar'));
+  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-orders')} Pedidos <span class="text-sm text-gray" style="font-weight:normal;">(de hoy)</span></div>
+    <div style="display:flex;gap:8px;"><div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="ped-q" placeholder="Factura, cliente, teléfono..." value="${escapeHtml(STATE.pedQ||'')}" oninput="STATE.pedQ=this.value;document.getElementById('ped-table-wrap').innerHTML=renderPedidosTable(window.__pedlist||[])" style="padding-left:34px;width:240px;"></div>
     <button class="btn btn-primary btn-sm" onclick="showPage('ventas')">${ic('i-plus')} Nueva</button></div></div>
-    ${renderPedidosTable(vs)}</div>`;
+    <div id="ped-table-wrap">${renderPedidosTable(vs)}</div></div>`;
 }
 function renderPedidosTable(vs){
-  const q=(document.getElementById('ped-q')?.value||'').toLowerCase();
-  let list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q));
-  if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin pedidos</p></div>`;
+  window.__pedlist=vs;
+  const q=(STATE.pedQ||'').toLowerCase().trim();
+  let list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q)||(v.mesa||'').toLowerCase().includes(q));
+  if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin pedidos${q?' para "'+escapeHtml(q)+'"':''}</p></div>`;
   const isAdmin=STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido / Mensajero</th><th>Tipo</th><th>Cliente/Mesa</th><th>Total</th><th>Cobro</th><th>Cocina</th><th>Pedido</th><th>Domiciliario</th><th>Acciones</th></tr></thead><tbody>
   ${list.map(v=>{
-    // Admin/supervisor editan siempre. El CAJERO puede editar mientras el pedido NO esté pagado.
-    // El MESERO NO puede editar pedidos.
+    // Admin/supervisor editan siempre. Cajero edita pedidos no pagados.
+    // El MESERO solo puede editar MESAS que estén abiertas (sin cobrar).
     const noPagado = v.estado!=='pagada';
-    const editable = STATE.user.rol!=='mesero' && STATE.user.rol!=='impresiones' && (isAdmin || noPagado);
+    const esMesero = STATE.user.rol==='mesero';
+    const meseroEditaMesa = esMesero && v.tipo==='mesa' && v.estado==='abierta';
+    const editable = STATE.user.rol==='impresiones' ? false
+      : esMesero ? meseroEditaMesa
+      : (isAdmin || noPagado);
     const abierta = v.estado==='abierta';
     const porVerificar = v.estado==='por_verificar';
     return `<tr ${abierta?'style="background:rgba(212,175,55,0.06)"':porVerificar?'style="background:rgba(52,152,219,0.08)"':''}>
@@ -902,8 +910,12 @@ function domiciliarioSelect(v){
 function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;DB.set('ventas',vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
 function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';DB.set('ventas',vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
 function editarPedido(id){
-  if(STATE.user.rol==='mesero' || STATE.user.rol==='impresiones'){ toast('Un mesero no puede editar pedidos. Avise al cajero.','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  if(STATE.user.rol==='impresiones'){ toast('Este usuario no puede editar pedidos','error'); return; }
+  if(STATE.user.rol==='mesero'){
+    // El mesero solo puede editar mesas abiertas (sin cobrar)
+    if(!(v.tipo==='mesa' && v.estado==='abierta')){ toast('Solo puede editar mesas que estén abiertas','error'); return; }
+  }
   STATE.editandoVenta=v; STATE.order=v.items.map(i=>({...i})); STATE.tipoPedido=v.tipo; STATE.mesa=v.mesa||'';
   STATE.cliNombre=v.cliNombre||''; STATE.cliTel=v.cliTel||''; STATE.cliDir=v.cliDir||''; STATE.cliBarrio=v.cliBarrio||'';
   STATE.valorDom=v.valorDom||0; STATE.descuento=v.descuento||0; STATE.descMot=v.descMot||''; STATE.orderObs=v.obs||'';
@@ -1083,8 +1095,14 @@ function caja(){
       <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:10px;">Caja Cerrada</h2>
       ${puedeAbrir
         ? `<p class="text-gray mb-2">La caja está cerrada. Ábrala con la base inicial para comenzar a operar.</p>
-           <button class="btn btn-gold" onclick="openModal('modal-caja')" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button>`
+           <button class="btn btn-gold" onclick="abrirModalCaja()" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button>`
         : `<p class="text-gray mb-2">La caja está cerrada. Solo el cajero, administrador o supervisor pueden abrirla.</p>`}
+      ${(['admin','supervisor'].includes(STATE.user.rol) && (DB.get('config')||{}).baseSiguiente)?`
+        <div style="margin-top:16px;border-top:1px solid rgba(212,175,55,0.15);padding-top:14px;">
+          <p class="text-sm text-gray">Base guardada para mañana: <strong class="text-gold">${fmtMoney((DB.get('config')||{}).baseSiguiente)}</strong></p>
+          <button class="btn btn-ghost btn-sm mt-1" onclick="retiroCajaCerrada()" style="border-color:var(--blue);">${ic('i-cash')} Retirar dinero de la caja cerrada</button>
+          <p class="text-xs text-gray mt-1">Reduce la base con la que abrirá mañana. Queda registrado.</p>
+        </div>`:''}
       </div>
       ${cierres.length>0&&puedeAbrir?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,15).map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
   }
@@ -1142,9 +1160,45 @@ function propinasPorMesero(vs){
   return Object.entries(x).map(([m,t])=>`<div class="flex-between text-sm" style="padding:4px 0;"><span>${escapeHtml(m)}</span><span class="text-green">${fmtMoney(t)}</span></div>`).join('')||'<span class="text-xs text-gray">—</span>';
 }
 function movBadge(t){ const m={entrada:['badge-green','Entrada'],salida:['badge-red','Salida'],gasto:['badge-orange','Gasto'],nomina:['badge-red','Nómina'],retiro:['badge-blue','Retiro']}; const x=m[t]||['badge-gray',t]; return `<span class="badge ${x[0]}">${x[1]}</span>`; }
+function retiroCajaCerrada(){
+  if(!['admin','supervisor'].includes(STATE.user.rol)){ toast('Solo admin o supervisor','error'); return; }
+  const cfg=DB.get('config')||{};
+  const base=cfg.baseSiguiente||0;
+  const txt=prompt(`Base guardada para mañana: ${fmtMoney(base)}\n\n¿Cuánto dinero va a retirar? (se descontará de la base de mañana)`);
+  if(txt===null) return;
+  const monto=parseFloat(txt)||0;
+  if(monto<=0){ toast('Monto inválido','error'); return; }
+  if(monto>base){ toast('No puede retirar más de la base guardada','error'); return; }
+  const nuevaBase=base-monto;
+  cfg.baseSiguiente=nuevaBase;
+  cfg.retirosCajaCerrada=cfg.retirosCajaCerrada||[];
+  cfg.retirosCajaCerrada.unshift({monto,por:STATE.user.nombre,fecha:now(),baseAntes:base,baseDespues:nuevaBase});
+  DB.set('config',cfg);
+  logAudit('Retiro con caja cerrada',`${fmtMoney(monto)} retirado por ${STATE.user.nombre}. Base mañana: ${fmtMoney(base)} → ${fmtMoney(nuevaBase)}`);
+  toast(`Retirados ${fmtMoney(monto)}. Base de mañana: ${fmtMoney(nuevaBase)}`,'success');
+  showPage('caja');
+}
+function abrirModalCaja(){
+  const cfg=DB.get('config')||{};
+  const baseObl=cfg.baseSiguiente;
+  const input=document.getElementById('caja-fondo');
+  const aviso=document.getElementById('caja-base-aviso');
+  if(baseObl!==undefined && baseObl!==null){
+    // Base obligatoria = lo que quedó al cerrar ayer. Bloqueada.
+    if(input){ input.value=baseObl; input.readOnly=true; input.style.opacity='0.7'; }
+    if(aviso) aviso.innerHTML=`La base de hoy es <strong>${fmtMoney(baseObl)}</strong>, igual a lo que quedó contado en el último cierre. No se puede cambiar.`;
+  } else {
+    if(input){ input.readOnly=false; input.style.opacity='1'; }
+    if(aviso) aviso.textContent='Primera apertura: ingrese la base con la que inicia.';
+  }
+  openModal('modal-caja');
+}
 function abrirCaja(){
   if(STATE.user.rol==='mesero'){ toast('Un mesero no puede abrir caja','error'); closeModal('modal-caja'); return; }
-  const fondo=parseFloat(document.getElementById('caja-fondo').value)||0;
+  const cfg=DB.get('config')||{};
+  let fondo=parseFloat(document.getElementById('caja-fondo').value)||0;
+  // Si hay base obligatoria del cierre anterior, forzarla
+  if(cfg.baseSiguiente!==undefined && cfg.baseSiguiente!==null){ fondo=cfg.baseSiguiente; }
   DB.set('caja_actual',{id:uid(),cajero:STATE.user.nombre,apertura:now(),fondo,movimientos:[],ordenSeq:0});
   logAudit('Abrió caja',`Base: ${fmtMoney(fondo)}`); closeModal('modal-caja'); toast('Caja abierta','success'); showPage('caja');
 }
@@ -1260,7 +1314,9 @@ function confirmarCierre(){
   const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,
     total:totalVentas, esperadoEfectivo, contadoEfectivo:contado, baseFinal:contado, diferencia, obsCierre:obs, cerradoPor:STATE.user.nombre};
   const cs=DB.get('cierres')||[]; cs.unshift(cierre); DB.set('cierres',cs); DB.set('caja_actual',null);
-  logAudit('Cerró caja',`${c.cajero} - Ventas: ${fmtMoney(totalVentas)} - ${diferencia===0?'Cuadrada':diferencia>0?'Sobra '+fmtMoney(diferencia):'Falta '+fmtMoney(Math.abs(diferencia))}`);
+  // La base del día siguiente DEBE ser lo que quedó contado al cerrar
+  const cfg=DB.get('config')||{}; cfg.baseSiguiente=contado; DB.set('config',cfg);
+  logAudit('Cerró caja',`${c.cajero} - Ventas: ${fmtMoney(totalVentas)} - ${diferencia===0?'Cuadrada':diferencia>0?'Sobra '+fmtMoney(diferencia):'Falta '+fmtMoney(Math.abs(diferencia))} - Base día siguiente: ${fmtMoney(contado)}`);
   closeModal('modal-cierre');
   toast(diferencia===0?'Caja cerrada y cuadrada':diferencia>0?`Caja cerrada. Sobran ${fmtMoney(diferencia)}`:`Caja cerrada. Faltan ${fmtMoney(Math.abs(diferencia))}`, diferencia===0?'success':'error');
   imprimirCierre(cierre);
@@ -1340,7 +1396,7 @@ function usuarios(){
   return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-users')} Gestión de Usuarios</div>
     <button class="btn btn-primary btn-sm" onclick="openModalUsuario()">${ic('i-plus')} Nuevo Usuario</button></div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
-    ${us.map(u=>`<tr><td class="font-bold">${escapeHtml(u.nombre)}</td><td><span class="text-gold">${escapeHtml(u.usuario)}</span></td><td><span class="badge ${u.rol==='admin'?'badge-red':u.rol==='supervisor'?'badge-blue':u.rol==='cocina'?'badge-orange':'badge-gold'}">${u.rol}</span></td><td><span class="badge ${u.activo?'badge-green':'badge-gray'}">${u.activo?'Activo':'Inactivo'}</span></td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalUsuario('${u.id}')">${ic('i-edit')}</button><button class="btn btn-${u.activo?'danger':'success'} btn-sm" onclick="toggleUsuario('${u.id}')">${u.activo?ic('i-ban'):ic('i-check')}</button></td></tr>`).join('')}
+    ${us.map(u=>`<tr><td class="font-bold">${escapeHtml(u.nombre)}</td><td><span class="text-gold">${escapeHtml(u.usuario)}</span></td><td><span class="badge ${u.rol==='admin'?'badge-red':u.rol==='supervisor'?'badge-blue':u.rol==='cocina'?'badge-orange':'badge-gold'}">${u.rol}</span></td><td><span class="badge ${u.activo?'badge-green':'badge-gray'}">${u.activo?'Activo':'Inactivo'}</span></td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalUsuario('${u.id}')" title="Editar">${ic('i-edit')}</button><button class="btn btn-${u.activo?'danger':'success'} btn-sm" onclick="toggleUsuario('${u.id}')" title="${u.activo?'Desactivar':'Activar'}">${u.activo?ic('i-ban'):ic('i-check')}</button><button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.id}')" title="Eliminar definitivamente">${ic('i-trash')}</button></td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 function openModalUsuario(id){
@@ -1364,18 +1420,34 @@ function saveUsuario(){
   closeModal('modal-usuario'); toast('Usuario guardado','success'); showPage('usuarios');
 }
 function toggleUsuario(id){ const us=DB.get('usuarios')||[]; const u=us.find(x=>x.id===id); if(u){u.activo=!u.activo;DB.set('usuarios',us);logAudit((u.activo?'Activó':'Desactivó')+' usuario',u.nombre);} showPage('usuarios'); }
+function eliminarUsuario(id){
+  if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede eliminar usuarios','error'); return; }
+  const us=DB.get('usuarios')||[]; const u=us.find(x=>x.id===id); if(!u) return;
+  if(u.id===STATE.user.id){ toast('No puede eliminarse a sí mismo','error'); return; }
+  if(u.usuario==='admin'){ toast('No se puede eliminar el administrador principal','error'); return; }
+  const protegidos=['biometria','impresiones'];
+  if(protegidos.includes(u.usuario)){
+    if(!confirm(`"${u.nombre}" es un usuario del sistema (${u.usuario}). Si lo elimina, se volverá a crear solo al recargar. ¿Eliminar de todas formas?`)) return;
+  }
+  if(!confirm(`¿Eliminar DEFINITIVAMENTE al usuario "${u.nombre}" (${u.usuario})?\n\nEsto no se puede deshacer. El usuario desaparece de la lista.`)) return;
+  const nuevos=us.filter(x=>x.id!==id);
+  DB.set('usuarios',nuevos);
+  logAudit('Eliminó usuario definitivamente',`${u.nombre} (${u.usuario}) por ${STATE.user.nombre}`);
+  toast('Usuario eliminado','success');
+  showPage('usuarios');
+}
 
 // ========================= HISTORIAL =========================
 function historial(){
   const vs=DB.get('ventas')||[];
   return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-history')} Historial de Ventas</div>
-    <div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="hist-q" placeholder="Factura, cliente, teléfono..." oninput="showPage('historial')" style="padding-left:34px;width:240px;"></div></div>
-    ${renderHistTable(vs)}</div>`;
+    <div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="hist-q" placeholder="Factura, cliente, teléfono..." value="${escapeHtml(STATE.histQ||'')}" oninput="STATE.histQ=this.value;document.getElementById('hist-table-wrap').innerHTML=renderHistTable(DB.get('ventas')||[])" style="padding-left:34px;width:240px;"></div></div>
+    <div id="hist-table-wrap">${renderHistTable(vs)}</div></div>`;
 }
 function renderHistTable(vs){
-  const q=(document.getElementById('hist-q')?.value||'').toLowerCase();
-  const list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q));
-  if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin ventas</p></div>`;
+  const q=(STATE.histQ||'').toLowerCase().trim();
+  const list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q)||(v.mesa||'').toLowerCase().includes(q));
+  if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin resultados${q?' para "'+escapeHtml(q)+'"':''}</p></div>`;
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido</th><th>Tipo</th><th>Cliente/Mesa</th><th>Subtotal</th><th>Desc.</th><th>Total</th><th>Método</th><th>Estado</th><th>Fecha</th><th></th></tr></thead><tbody>
   ${list.map(v=>`<tr style="${v.estado==='anulada'?'opacity:.4':''}"><td><span class="text-gold font-bold">${refPedido(v)}</span>${v.estado==='anulada'?'<br><span class="text-xs text-red">(ANULADA)</span>':''}</td><td>${tipoLabel(v.tipo)}</td><td>${escapeHtml(v.cliNombre||v.mesa||'—')}</td><td>${fmtMoney(v.subtotal||v.total)}</td><td>${v.descuento>0?fmtMoney(v.descuento):'—'}</td><td class="font-bold">${fmtMoney(v.total)}</td><td>${v.metodo||'—'}</td><td>${estadoBadge(v.estado)}</td><td class="text-xs text-gray">${fmtDate(v.fecha)}</td><td><button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')">${ic('i-print')}</button></td></tr>`).join('')}
   </tbody></table></div>`;
@@ -2013,7 +2085,7 @@ function buildModals(){
 
   <div id="modal-descuento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:350px;"><div class="modal-header"><h3>${ic('i-tag')} Aplicar Descuento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-descuento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="desc-tipo"><option value="pct">Porcentaje (%)</option><option value="fijo">Valor fijo (COP)</option></select></div><div class="form-group"><label>Valor</label><input type="number" id="desc-valor" placeholder="0" min="0"></div><div class="form-group"><label>Motivo</label><input type="text" id="desc-motivo" placeholder="Razón"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-descuento')">Cancelar</button><button class="btn btn-gold" onclick="applyDescuento()">Aplicar</button></div></div></div>
 
-  <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
+  <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"><p class="text-xs text-gray mt-1" id="caja-base-aviso"></p></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
 
   <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
@@ -2073,8 +2145,14 @@ function bloquearPantalla(){
 }
 function ocultarBloqueo(){ document.getElementById('lock-screen').style.display='none'; }
 function desbloquearPantalla(){
-  const pass=document.getElementById('lock-pass').value;
-  if(STATE.user && pass===STATE.user.pass){ ocultarBloqueo(); }
+  const pass=(document.getElementById('lock-pass').value||'').trim();
+  if(!STATE.user){ ocultarBloqueo(); return; }
+  // Verificar contra los datos actuales del usuario (por si cambió la clave), comparando sin espacios extra
+  const us=DB.get('usuarios')||[];
+  const actual=us.find(u=>u.id===STATE.user.id) || us.find(u=>u.usuario===STATE.user.usuario);
+  const claveOk = (STATE.user.pass||'').trim();
+  const claveActual = actual?(actual.pass||'').trim():claveOk;
+  if(pass===claveOk || pass===claveActual){ document.getElementById('lock-pass').value=''; document.getElementById('lock-error').style.display='none'; ocultarBloqueo(); }
   else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
 }
 setInterval(updateClock,1000);
