@@ -14,6 +14,28 @@ const DB = {
     }
   },
 };
+// Guarda un cambio en un pedido SIN riesgo de borrar pedidos de otros dispositivos.
+// En vez de reescribir todo el array a ciegas, fusiona por id: conserva todos los
+// pedidos que existan (en el cache local Y en lo último recibido de Firebase) y
+// solo agrega o actualiza el pedido indicado. Evita que dos cajas se pisen los pedidos.
+function fusionarYGuardarVentas(arrayLocal){
+  // arrayLocal ya viene con el cambio aplicado. Garantizamos no perder nada.
+  const porId = {};
+  // 1) lo que ya está en cache (incluye lo que llegó de Firebase por el listener)
+  (CACHE['ventas']||[]).forEach(v=>{ if(v&&v.id) porId[v.id]=v; });
+  // 2) aplicar/montar el array local encima (cambios recientes ganan)
+  (arrayLocal||[]).forEach(v=>{ if(v&&v.id) porId[v.id]=v; });
+  const fusionado = Object.values(porId).sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+  DB.set('ventas', fusionado);
+}
+// Borra UN solo pedido de forma segura, sin arrastrar ni borrar los demás.
+function borrarVentaSegura(id){
+  const porId = {};
+  (CACHE['ventas']||[]).forEach(v=>{ if(v&&v.id) porId[v.id]=v; });
+  delete porId[id];
+  const fusionado = Object.values(porId).sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+  DB.set('ventas', fusionado);
+}
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
 let SERVER_OFFSET = 0; // diferencia entre reloj del servidor y el del dispositivo (ms)
 function now(){ return new Date(Date.now() + SERVER_OFFSET).toISOString(); }
@@ -540,7 +562,7 @@ function guardarMesa(){
       v.estadoCocina='pendiente'; // vuelve a cocina por si agregó/quitó platos
       v.ticketImpreso=false; // reimprimir comanda con los cambios
       v.reimpreso=(v.reimpreso||0)+1;
-      DB.set('ventas',vs);
+      fusionarYGuardarVentas(vs);
       logAudit('Actualizó mesa',`${v.mesa} por ${STATE.user.nombre}`);
       notifyKitchen();
       toast('Mesa actualizada y enviada a cocina','success');
@@ -555,7 +577,7 @@ function guardarMesa(){
     items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
     total, metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
     obs:STATE.orderObs, cajero:STATE.user?.nombre, atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol, cajaId:DB.get('caja_actual')?.id||null };
-  vs.unshift(venta); DB.set('ventas',vs);
+  vs.unshift(venta); fusionarYGuardarVentas(vs);
   logAudit('Abrió mesa',STATE.mesa);
   notifyKitchen();
   clearOrder();
@@ -579,7 +601,7 @@ function guardarPedidoAbierto(){
     total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
     obs:STATE.orderObs, cajero:'', mesero:STATE.user.nombre, creadoPor:STATE.user.nombre, atendidoPor:STATE.user.nombre, atendidoRol:STATE.user.rol, cajaId:DB.get('caja_actual')?.id||null };
-  vs.unshift(venta); DB.set('ventas',vs);
+  vs.unshift(venta); fusionarYGuardarVentas(vs);
   if(esDomicilio){
     const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
     if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
@@ -606,7 +628,7 @@ function cobrarVenta(){
       v.total=ventaReal; v.obs=STATE.orderObs;
       v.estadoCocina='pendiente'; // vuelve a cocina con los cambios
       v.ticketImpreso=false; v.reimpreso=(v.reimpreso||0)+1; // reimprimir comanda
-      v.modificadoPor=STATE.user.nombre; v.modificadoEn=now(); DB.set('ventas',vs);
+      v.modificadoPor=STATE.user.nombre; v.modificadoEn=now(); fusionarYGuardarVentas(vs);
       notifyKitchen();
       logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado y reenviado a cocina','success');
       printTicketCocina(v); }
@@ -621,7 +643,7 @@ function cobrarVenta(){
     total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
     obs:STATE.orderObs, cajero:STATE.user?.nombre, atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
-  vs.unshift(venta); DB.set('ventas',vs);
+  vs.unshift(venta); fusionarYGuardarVentas(vs);
 
   if(esDomicilio){
     const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
@@ -914,7 +936,7 @@ function renderPedidosTable(vs){
       ${porVerificar?`<button class="btn btn-primary btn-sm" onclick="verificarPago('${v.id}')" title="Verificar comprobante">${ic('i-check')} Verificar</button>`:''}
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
-      ${isAdmin?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="Anular">${ic('i-ban')}</button>`:''}
+      ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : isAdmin)?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
       ${isAdmin && v.tipo==='domicilio' && (DB.get('config')?.permitirEliminarDomicilio)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar definitivamente">${ic('i-trash')}</button>`:''}
     </td></tr>`;}).join('')}
   </tbody></table></div>`;
@@ -924,8 +946,8 @@ function domiciliarioSelect(v){
   const ds=(DB.get('domiciliarios')||[]).filter(d=>d.activo);
   return `<select onchange="asignarDomiciliario('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="">Asignar...</option>${ds.map(d=>`<option ${v.domiciliario===d.nombre?'selected':''}>${escapeHtml(d.nombre)}</option>`).join('')}</select>`;
 }
-function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;DB.set('ventas',vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
-function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';DB.set('ventas',vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
+function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;fusionarYGuardarVentas(vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
+function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';fusionarYGuardarVentas(vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
 function editarPedido(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   if(STATE.user.rol==='impresiones'){ toast('Este usuario no puede editar pedidos','error'); return; }
@@ -1005,14 +1027,14 @@ function confirmarCobroMesa(){
   const requiereVerif = pagos.banco>0 || pagos.llave>0;
   if(requiereVerif){
     v.estado='por_verificar';
-    DB.set('ventas',vs);
+    fusionarYGuardarVentas(vs);
     logAudit('Cobro pendiente de verificar',`${v.factura||v.cliNombre} - banco/llave`);
     closeModal('modal-cobro'); cobrandoMesaId=null;
     toast('Pago registrado. Pendiente de verificar el comprobante (Banco/Llave).','info');
     showPage('pedidos'); return;
   }
   v.estado='pagada';
-  DB.set('ventas',vs);
+  fusionarYGuardarVentas(vs);
   const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre);
   logAudit('Cobró pedido',`${ref} - venta ${fmtMoney(v.ventaReal)}${propina>0?' propina '+fmtMoney(propina):''}${recargo>0?' recargo '+fmtMoney(recargo):''}`);
   closeModal('modal-cobro'); cobrandoMesaId=null;
@@ -1024,7 +1046,7 @@ function verificarPago(id){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
   if(!confirm('¿Confirma que ya verificó el comprobante de pago (Banco/Llave) y el dinero está recibido?')) return;
   v.estado='pagada'; v.verificadoPor=STATE.user.nombre; v.fechaVerif=now();
-  DB.set('ventas',vs);
+  fusionarYGuardarVentas(vs);
   logAudit('Verificó pago',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`);
   toast('Pago verificado','success');
   printFactura(v);
@@ -1033,13 +1055,16 @@ function verificarPago(id){
 function anularVenta(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   if(v.tipo==='domicilio'){
-    if(!confirm('Este es un domicilio. Se eliminará por completo sin dejar rastro en el sistema. ¿Continuar?')) return;
-    DB.set('ventas',(DB.get('ventas')||[]).filter(x=>x.id!==id));
+    // Solo el ADMINISTRADOR puede borrar domicilios, y solo cuando él lo decida.
+    // No se borran solos. No deja ningún rastro (ni historial, ni auditoría).
+    if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede eliminar domicilios','error'); return; }
+    if(!confirm('Este es un domicilio. Se ELIMINARÁ por completo, sin dejar ningún rastro en el sistema (ni en historial ni en auditoría).\n\n¿Continuar?')) return;
+    borrarVentaSegura(id);
     toast('Domicilio eliminado','error'); showPage('pedidos'); return;
   }
   if(!confirm('¿Anular esta venta? Quedará registrada como ANULADA en el historial y auditoría (no se borra, queda el rastro).')) return;
   const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
-  if(t){ t.estado='anulada'; t.anuladoPor=STATE.user.nombre; t.anuladoEn=now(); DB.set('ventas',vs); logAudit('Anuló venta',`${t.factura||refPedido(t)} por ${STATE.user.nombre}`); }
+  if(t){ t.estado='anulada'; t.anuladoPor=STATE.user.nombre; t.anuladoEn=now(); fusionarYGuardarVentas(vs); logAudit('Anuló venta',`${t.factura||refPedido(t)} por ${STATE.user.nombre}`); }
   toast('Venta anulada (queda en historial)','error'); showPage('pedidos');
 }
 function eliminarDefinitivo(id){
@@ -1047,7 +1072,7 @@ function eliminarDefinitivo(id){
   if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede eliminar definitivamente','error'); return; }
   if(!confirm('⚠ ADVERTENCIA: Esta acción eliminará PERMANENTEMENTE el pedido.\n\nSe borrará de: ventas, historial, reportes, caja y estadísticas. Quedará SOLO un registro en auditoría de que usted lo borró. NO se puede deshacer.\n\n¿Continuar?')) return;
   logAudit('Eliminó pedido DEFINITIVAMENTE',`${v.factura||v.cliNombre||refPedido(v)} - ${fmtMoney(v.total)} por ${STATE.user.nombre}`);
-  DB.set('ventas',(DB.get('ventas')||[]).filter(x=>x.id!==id));
+  borrarVentaSegura(id);
   toast('Pedido eliminado permanentemente','error'); showPage('pedidos');
 }
 function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(v){logAudit('Reimprimió factura',v.factura);printFactura(v);} }
@@ -1100,7 +1125,7 @@ function llamarMesero(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   // Marca un aviso que verán cajero/meseros, y suena alarma
   const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
-  if(t){ t.llamadoMesero=true; t.llamadoEn=now(); DB.set('ventas',vs); }
+  if(t){ t.llamadoMesero=true; t.llamadoEn=now(); fusionarYGuardarVentas(vs); }
   try{ sonidoListo(); }catch(e){}
   toast(`Avisando: ${refCocina(v)} está listo para entregar`,'success');
 }
@@ -1109,7 +1134,7 @@ function setEstadoCocina(id,e){
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado';
     if(e==='preparando' && !v.horaPreparando) v.horaPreparando=now();
     if(e==='listo' && !v.horaListo) v.horaListo=now();  // momento en que quedó listo (para medir tiempos)
-    DB.set('ventas',vs);
+    fusionarYGuardarVentas(vs);
     if(e==='listo'){ sonidoListo(); toast(`${refCocina(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
   showPage(STATE.page); updateBadges();
 }
@@ -1737,7 +1762,7 @@ function toggleEstacion(on){
     // Marcar TODOS los pedidos actuales como ya impresos, para que solo imprima los NUEVOS de aquí en adelante
     const vs=DB.get('ventas')||[]; let cambio=false;
     vs.forEach(v=>{ if(!v.ticketImpreso){ v.ticketImpreso=true; cambio=true; } if(v.estado==='pagada' && !v.facturaImpresa){ v.facturaImpresa=true; cambio=true; } });
-    if(cambio) DB.set('ventas',vs);
+    if(cambio) fusionarYGuardarVentas(vs);
     toast('Estación activada. Imprimirá solo los pedidos NUEVOS de aquí en adelante.','success');
     arrancarAutoImpresion();
   } else {
@@ -1880,7 +1905,7 @@ function toggleImprAuto(on){
     // Marcar lo existente como ya impreso para no imprimir el histórico de golpe
     const vs=DB.get('ventas')||[]; let ch=false;
     vs.forEach(v=>{ if(!v.ticketImpreso){v.ticketImpreso=true;ch=true;} if(v.estado==='pagada'&&!v.facturaImpresa){v.facturaImpresa=true;ch=true;} });
-    if(ch) DB.set('ventas',vs);
+    if(ch) fusionarYGuardarVentas(vs);
     toast('Impresión automática activada en este computador. Solo imprimirá pedidos NUEVOS.','success');
     if(!autoImpresionCajaTimer) autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes, 4000);
   } else {
@@ -1924,7 +1949,7 @@ function arrancarColaImpr(){
   const html = job.tipo==='ticket'? ticketCocinaHTML(v) : facturaHTML(v);
   // Marcar como impreso ANTES de imprimir (para no perder el rastro aunque falle el navegador)
   const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===job.id);
-  if(t){ if(job.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; DB.set('ventas',all); }
+  if(t){ if(job.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; fusionarYGuardarVentas(all); }
   try{ imprimirNavegador(html); }catch(e){ console.warn('Impr error',e); }
   // Esperar a que termine antes de la siguiente (evita que se solapen y se pierdan)
   setTimeout(()=>{
@@ -2362,7 +2387,7 @@ function revisarColaImpresion(){
     const html = item.tipo==='ticket'? ticketCocinaHTML(item.v) : facturaHTML(item.v);
     try{ imprimirConQZ(html).then(()=>{
       const all=DB.get('ventas')||[]; const t=all.find(x=>x.id===item.v.id);
-      if(t){ if(item.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; DB.set('ventas',all); }
+      if(t){ if(item.tipo==='ticket') t.ticketImpreso=true; else t.facturaImpresa=true; fusionarYGuardarVentas(all); }
       setTimeout(siguiente, 1000);
     }).catch(err=>{ console.warn('Cola impresión:',err); imprimiendoCola=false; }); }
     catch(e){ imprimiendoCola=false; }
