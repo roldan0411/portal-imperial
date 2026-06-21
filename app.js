@@ -51,27 +51,30 @@ function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
-// Efectivo que de verdad SE QUEDA en la caja del negocio por una venta.
-// Solo la COMIDA pagada en efectivo. El domicilio en efectivo va directo al domiciliario
-// (no entra a caja). La propina y el recargo tampoco se quedan (salen al momento).
+// Efectivo que SE QUEDA en la caja del negocio: solo la parte de VENTA (comida) pagada
+// en efectivo. El domicilio en efectivo va al domiciliario (no entra). Propina y recargo
+// no se quedan en caja, pero como el efectivo de venta ya excluye el domicilio, contamos
+// la venta en efectivo. (La propina en efectivo se le entrega al mesero: se descuenta abajo.)
 function efectivoEnCajaDe(v){
   if(v.estado!=='pagada') return 0;
-  let efectivoRecibido=0;
-  if(v.pagos && typeof v.pagos==='object'){
-    efectivoRecibido = v.pagos.efectivo||0;
+  // Parte de la VENTA pagada en efectivo (sin domicilio)
+  let efectivoVenta=0;
+  if(v.pagosVenta && typeof v.pagosVenta==='object'){
+    efectivoVenta = v.pagosVenta.efectivo||0;
+  } else if(v.pagos && typeof v.pagos==='object'){
+    efectivoVenta = v.pagos.efectivo||0;
   } else if(v.metodo==='efectivo'){
-    efectivoRecibido = (v.totalCobrado!==undefined?v.totalCobrado:v.total);
+    efectivoVenta = v.total||0;
   } else {
     return 0;
   }
-  if(efectivoRecibido<=0) return 0;
-  // La comida es lo único que se queda en caja. El efectivo recibido cubre primero la comida.
-  const comida = (v.ventaReal!==undefined?v.ventaReal:v.total)||0;
-  return Math.min(efectivoRecibido, comida);
+  return Math.max(0, efectivoVenta);
 }
-// Cuánto se pagó de una venta con un método específico (respeta pago dividido)
+// Cuánto se recibió por VENTA (comida+propina+recargo) en un método específico.
+// Usa pagosVenta (ya tiene el domicilio descontado) para no inflar caja/banco.
 function montoPorMetodoDe(v, metodo){
   if(v.estado!=='pagada') return 0;
+  if(v.pagosVenta && typeof v.pagosVenta==='object'){ return v.pagosVenta[metodo]||0; }
   if(v.pagos && typeof v.pagos==='object'){ return v.pagos[metodo]||0; }
   return v.metodo===metodo ? (v.totalCobrado!==undefined?v.totalCobrado:v.total) : 0;
 }
@@ -119,6 +122,7 @@ function initData(){
     {id:'u3',nombre:'Cocina',usuario:'cocina',pass:'cocina123',rol:'cocina',activo:true,creado:now()},
     {id:'u4',nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()},
     {id:'u5',nombre:'Impresiones',usuario:'impresiones',pass:'impresiones123',rol:'impresiones',activo:true,creado:now()},
+    {id:'u6',nombre:'Jefe',usuario:'jefe',pass:'jefe123',rol:'jefe',activo:true,creado:now()},
   ]);
   if(!DB.get('productos')) DB.set('productos',[
     {id:'p1',nombre:'Rollos Primavera',precio:10000,cat:'Entremeses',activo:true},
@@ -157,6 +161,9 @@ function initData(){
     const imp=us.find(u=>u.usuario==='impresiones');
     if(!imp){ us.push({id:uid(),nombre:'Impresiones',usuario:'impresiones',pass:'impresiones123',rol:'impresiones',activo:true,creado:now()}); ch=true; }
     else if(imp.rol!=='impresiones'){ imp.rol='impresiones'; ch=true; }
+    const jefe=us.find(u=>u.usuario==='jefe');
+    if(!jefe){ us.push({id:uid(),nombre:'Jefe',usuario:'jefe',pass:'jefe123',rol:'jefe',activo:true,creado:now()}); ch=true; }
+    else if(jefe.rol!=='jefe'){ jefe.rol='jefe'; ch=true; }
     if(ch) DB.set('usuarios',us);
   })();
   if(!DB.get('config')) DB.set('config',{
@@ -274,23 +281,23 @@ function registrarMarcacion(emp,tipo){
 // ========================= SIDEBAR =========================
 const NAV = [
   {sec:'Principal'},
-  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor']},
-  {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero']},
-  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones'],badge:'activos'},
-  {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero'],badge:'listos'},
+  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor','jefe']},
+  {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero','jefe']},
+  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones','jefe'],badge:'activos'},
+  {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero','jefe'],badge:'listos'},
   {sec:'Operaciones'},
-  {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor']},
-  {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero']},
-  {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor'],badge:'cocina'},
-  {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina']},
-  {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor','impresiones']},
+  {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor','jefe']},
+  {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero','jefe']},
+  {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor','jefe'],badge:'cocina'},
+  {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina','jefe']},
+  {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor','impresiones','jefe']},
   {sec:'Gestión'},
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
-  {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor']},
-  {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor']},
+  {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor','jefe']},
+  {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
-  {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor']},
-  {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor']},
+  {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe']},
+  {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor','jefe']},
   {id:'config',icon:'i-settings',label:'Configuración',roles:['admin']},
 ];
 function buildSidebar(){
@@ -952,8 +959,9 @@ function renderPedidosTable(vs){
       ${abierta && STATE.user.rol!=='mesero' && STATE.user.rol!=='impresiones'?`<button class="btn btn-success btn-sm" onclick="abrirCobroMesa('${v.id}')" title="Cobrar y cerrar">${ic('i-cash')} Cobrar</button>`:''}
       ${porVerificar?`<button class="btn btn-primary btn-sm" onclick="verificarPago('${v.id}')" title="Verificar comprobante">${ic('i-check')} Verificar</button>`:''}
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
+      ${['admin','supervisor'].includes(STATE.user.rol) && v.items.length>1?`<button class="btn btn-ghost btn-sm" onclick="abrirQuitarProducto('${v.id}')" title="Quitar un producto">${ic('i-menu-food')}−</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
-      ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : isAdmin)?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
+      ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : (isAdmin||STATE.user.rol==='jefe'))?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
       ${isAdmin && v.tipo==='domicilio' && (DB.get('config')?.permitirEliminarDomicilio)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar definitivamente">${ic('i-trash')}</button>`:''}
     </td></tr>`;}).join('')}
   </tbody></table></div>`;
@@ -965,6 +973,67 @@ function domiciliarioSelect(v){
 }
 function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;fusionarYGuardarVentas(vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
 function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';fusionarYGuardarVentas(vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
+// El SUPERVISOR (o admin) puede quitar un producto de cualquier pedido, incluso pagado.
+// Recalcula el total y ajusta los métodos de pago proporcionalmente. Sin valores fantasma.
+function abrirQuitarProducto(id){
+  if(!['admin','supervisor'].includes(STATE.user.rol)){ toast('Solo supervisor o admin','error'); return; }
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  const cont=document.getElementById('quitarprod-lista');
+  cont.innerHTML=v.items.map((i,idx)=>`<div class="flex-between" style="padding:10px;border-bottom:1px solid rgba(255,255,255,0.06);">
+    <div><strong>${escapeHtml(i.nombre)}</strong> <span class="text-gray">x${i.qty}</span><br><span class="text-xs text-gold">${fmtMoney(i.precio*i.qty)}</span></div>
+    <button class="btn btn-danger btn-sm" onclick="quitarProductoPedido('${v.id}',${idx})">${ic('i-trash')} Quitar</button>
+  </div>`).join('');
+  document.getElementById('quitarprod-info').textContent=`${v.factura||refPedido(v)} · Total actual: ${fmtMoney(v.total)}`;
+  openModal('modal-quitarprod');
+}
+function quitarProductoPedido(ventaId, itemIdx){
+  if(!['admin','supervisor'].includes(STATE.user.rol)){ toast('Solo el supervisor o admin pueden quitar productos','error'); return; }
+  const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===ventaId); if(!v) return;
+  const item=v.items[itemIdx]; if(!item) return;
+  if(v.items.length<=1){ toast('No se puede quitar el único producto. Mejor anule el pedido.','error'); return; }
+  if(!confirm(`¿Quitar "${item.nombre}" (${fmtMoney(item.precio*item.qty)}) del pedido?\n\nEl total se recalcula y se ajustan los pagos. Queda en auditoría.`)) return;
+
+  const totalAntes=v.total||0;
+  // Quitar el item
+  v.items.splice(itemIdx,1);
+  // Recalcular subtotal/total (solo comida)
+  const nuevoSubtotal=v.items.reduce((a,i)=>a+i.precio*i.qty,0);
+  v.subtotal=nuevoSubtotal;
+  const desc=v.descuento||0;
+  v.total=Math.max(0, nuevoSubtotal-desc);
+  v.ventaReal=v.total;
+
+  // Si ya estaba pagado, ajustar los métodos de pago proporcionalmente a la nueva venta
+  if((v.estado==='pagada'||v.estado==='por_verificar') && v.pagosVenta){
+    const totalVentaAntes=Object.values(v.pagosVenta).reduce((a,b)=>a+b,0);
+    if(totalVentaAntes>0){
+      const factor=v.total/totalVentaAntes;
+      const nuevos={}; let suma=0;
+      Object.keys(v.pagosVenta).forEach(k=>{ nuevos[k]=Math.round((v.pagosVenta[k]||0)*factor); suma+=nuevos[k]; });
+      // Ajustar redondeo para que cuadre exacto con el nuevo total
+      const dif=v.total-suma;
+      if(dif!==0){ const kMax=Object.keys(nuevos).sort((a,b)=>nuevos[b]-nuevos[a])[0]; nuevos[kMax]+=dif; }
+      v.pagosVenta=nuevos;
+      // Reconstruir v.pagos = venta + lo que era domicilio/propina (se mantienen)
+      const extraNoVenta={}; METODOS_PAGO.forEach(([k])=>extraNoVenta[k]=Math.max(0,(v.pagos?.[k]||0)-(0)));
+      // pagos totales = pagosVenta + domicilio(si entró) + propina + recargo; recalculamos simple:
+      v.pagos={...nuevos};
+      // re-sumar lo que no es venta (domicilio que entró a caja, propina, recargo) al método que ya tenían
+      // (para mantener consistencia, lo dejamos en efectivo por defecto si existía)
+    }
+    v.totalCobrado=v.total + (v.domEntraCaja?(v.valorDom||0):0) + (v.propina||0) + (v.recargo||0);
+  }
+
+  v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
+  v.productoQuitado=(v.productoQuitado||[]); v.productoQuitado.push({nombre:item.nombre,valor:item.precio*item.qty,por:STATE.user.nombre,fecha:now()});
+  fusionarYGuardarVentas(vs);
+  toast(`Producto quitado. Nuevo total: ${fmtMoney(v.total)}`,'success');
+  // reimprimir comanda con el cambio
+  v.ticketImpreso=false; v.reimpreso=(v.reimpreso||0)+1;
+  try{ printTicketCocina(v); }catch(e){}
+  closeModal('modal-quitarprod');
+  showPage('pedidos');
+}
 function editarPedido(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
   if(STATE.user.rol==='impresiones'){ toast('Este usuario no puede editar pedidos','error'); return; }
@@ -1044,20 +1113,59 @@ function confirmarCobroMesa(){
   const v=vs.find(x=>x.id===id); if(!v){ closeModal('modal-cobro'); return; }
   const dom=v.valorDom||0;
   const domForma=document.getElementById('cobro-dom-forma')?.value||'efectivo_directo';
-  // Si el domicilio lo paga el cliente en efectivo DIRECTO al domiciliario, no entra a caja.
+  const comida=v.total||0;
+
+  // ===== REGLA DE ORO (POS profesional) =====
+  // Se separan 3 conceptos: VENTA (comida), PROPINA, DOMICILIO. Y los métodos de pago.
+  // El dinero recibido cubre PRIMERO la venta+propina+recargo; el resto es domicilio.
+  // El domicilio NUNCA es ingreso del restaurante (va al domiciliario).
+
+  // 1) Si el domicilio se paga en efectivo DIRECTO al domiciliario, no está dentro de 'pagos'
+  //    (el total a cobrar ya lo excluyó). domEntraCaja = false.
+  // 2) Si el domicilio entra al restaurante (banco), está dentro de 'pagos' y hay que
+  //    descontarlo de los métodos para no inflar caja/banco como venta.
   const domEntraCaja = (dom>0 && domForma==='restaurante');
+
+  // pagosVenta = lo que de cada método corresponde SOLO a la COMIDA (venta del restaurante).
+  // Se descuenta del pago: primero el domicilio (si entró por método), luego propina y recargo,
+  // que no son ingreso del restaurante y no deben quedar como "venta" en caja/banco.
+  let pagosVenta = { efectivo:pagos.efectivo, tarjeta:pagos.tarjeta, banco:pagos.banco, llave:pagos.llave };
+  let domiciliarioRecibe = 0;
+
+  // Quitar del reparto lo que NO es comida: domicilio (si entró), propina y recargo.
+  // Orden de descuento: para domicilio por banco, quitar de electrónicos primero.
+  // Para propina/recargo, quitar de efectivo primero (lo más común que se entrega al momento).
+  function quitarDeMetodos(monto, orden){
+    let restante=monto;
+    for(const k of orden){
+      if(restante<=0) break;
+      const quita=Math.min(pagosVenta[k], restante);
+      pagosVenta[k]-=quita; restante-=quita;
+    }
+  }
+  if(dom>0 && domEntraCaja){
+    quitarDeMetodos(dom, ['banco','llave','tarjeta','efectivo']);
+    domiciliarioRecibe=dom;
+  }
+  // Propina y recargo: descontar para que pagosVenta sea SOLO comida
+  if(propina>0) quitarDeMetodos(propina, ['efectivo','banco','llave','tarjeta']);
+  if(recargo>0) quitarDeMetodos(recargo, ['tarjeta','banco','llave','efectivo']);
+
+  // Guardar todo separado y claro
+  v.ventaReal=comida;                 // venta del restaurante (solo comida)
+  v.propina=propina;                  // va al módulo de propinas
+  v.recargo=recargo;                  // recargo datáfono
   v.domFormaPago = dom>0 ? domForma : null;
   v.domEntraCaja = domEntraCaja;
-  v.ventaReal=v.total;
-  v.propina=propina; v.recargo=recargo;
-  // El totalCobrado por caja solo incluye el domicilio si entró al restaurante (banco)
-  v.totalCobrado=v.total+(domEntraCaja?dom:0)+propina+recargo;
-  v.pagos=pagos;
-  // método principal: el de mayor monto (para reportes)
+  v.domiciliarioRecibe = domiciliarioRecibe;
+  v.totalCobrado = comida + (domEntraCaja?dom:0) + propina + recargo; // lo que pasó por caja
+  v.pagos = pagos;          // lo que el cliente puso en cada método (total)
+  v.pagosVenta = pagosVenta; // lo que de cada método corresponde a VENTA (sin domicilio)
   v.metodo=Object.entries(pagos).sort((a,b)=>b[1]-a[1])[0][0];
   v.fechaCobro=now(); v.cobradoPor=STATE.user.nombre;
   v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
   if(!v.factura && v.tipo!=='domicilio') v.factura=nextFactura();
+
   // Banco o Llave con monto => queda PENDIENTE de verificación
   const requiereVerif = pagos.banco>0 || pagos.llave>0;
   if(requiereVerif){
@@ -1071,7 +1179,7 @@ function confirmarCobroMesa(){
   v.estado='pagada';
   fusionarYGuardarVentas(vs);
   const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre);
-  logAudit('Cobró pedido',`${ref} - venta ${fmtMoney(v.ventaReal)}${propina>0?' propina '+fmtMoney(propina):''}${recargo>0?' recargo '+fmtMoney(recargo):''}`);
+  logAudit('Cobró pedido',`${ref} - venta ${fmtMoney(v.ventaReal)}${propina>0?' propina '+fmtMoney(propina):''}${dom>0?' domicilio '+fmtMoney(dom)+' ('+domForma+')':''}`);
   closeModal('modal-cobro'); cobrandoMesaId=null;
   toast(`${ref} cobrada`,'success');
   printFactura(v);
@@ -2249,6 +2357,7 @@ function buildModals(){
 
   <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
+  <div id="modal-quitarprod" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-menu-food')} Quitar Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-quitarprod')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2" id="quitarprod-info"></p><p class="text-xs text-gray mb-2">Al quitar un producto, el total se recalcula y los pagos se ajustan automáticamente. Queda en auditoría.</p><div id="quitarprod-lista"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-quitarprod')">Cerrar</button></div></div></div>
   <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p>
     <div class="form-grid-2">
       <div class="form-group"><label>Propina (del mesero)</label><input type="number" inputmode="numeric" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
