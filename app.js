@@ -52,10 +52,12 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
 // Efectivo que de verdad SE QUEDA en la caja del negocio por una venta.
-// Solo la COMIDA pagada en efectivo. El domicilio (va al domiciliario), la propina
-// (va al mesero) y el recargo del datáfono NO se quedan en caja: salen al momento.
+// Criterio: el efectivo recibido cubre PRIMERO la comida (que sí se queda en caja).
+// El domicilio, propina y recargo salen del cajón al momento, así que solo restamos
+// del efectivo la parte de esos extras que NO alcanzó a cubrir otro método de pago.
 function efectivoEnCajaDe(v){
   if(v.estado!=='pagada') return 0;
+  // Efectivo recibido en esta venta
   let efectivoRecibido=0;
   if(v.pagos && typeof v.pagos==='object'){
     efectivoRecibido = v.pagos.efectivo||0;
@@ -64,13 +66,11 @@ function efectivoEnCajaDe(v){
   } else {
     return 0;
   }
-  // Quitar del efectivo recibido lo que NO se queda en caja (sale al momento):
-  // domicilio + propina + recargo. Lo que queda es solo la comida en efectivo.
-  const noSeQueda = (v.valorDom||0) + (v.propina||0) + (v.recargo||0);
-  // El efectivo recibido pudo no cubrir todos esos extras si parte se pagó por otro método,
-  // pero como criterio simple y seguro, restamos lo que salga del efectivo recibido.
-  const efectivoComida = Math.max(0, efectivoRecibido - noSeQueda);
-  return efectivoComida;
+  if(efectivoRecibido<=0) return 0;
+  const comida = (v.ventaReal!==undefined?v.ventaReal:v.total)||0;
+  // La comida que se quedó en caja en efectivo = lo menor entre el efectivo recibido y la comida.
+  // (Si el efectivo recibido es mayor que la comida, el excedente eran extras que salen del cajón.)
+  return Math.min(efectivoRecibido, comida);
 }
 // Cuánto se pagó de una venta con un método específico (respeta pago dividido)
 function montoPorMetodoDe(v, metodo){
