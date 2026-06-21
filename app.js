@@ -1225,6 +1225,18 @@ function caja(){
       <hr class="divider">
       <div class="flex-between" style="font-size:18px;font-weight:700;"><span>Efectivo en Caja</span><span class="text-gold">${fmtMoney(enCaja)}</span></div>
       <p class="text-xs text-gray mt-1">Solo el efectivo de la COMIDA que se queda en el cajón (base + comida en efectivo + entradas − gastos − retiros). El domicilio, la propina y el recargo NO cuentan: salen al momento. El dinero de banco/tarjeta/llave tampoco está en el cajón.</p>
+      ${STATE.user.rol==='admin'?`<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--gold);">🔍 Ver desglose del efectivo (diagnóstico)</summary>
+        <div style="margin-top:8px;font-size:11px;">
+          <div class="flex-between" style="padding:3px 0;"><span>Base inicial</span><span>${fmtMoney(c.fondo)}</span></div>
+          <div class="flex-between" style="padding:3px 0;"><span>+ Comida en efectivo</span><span>${fmtMoney(efectivoVentas)}</span></div>
+          <div class="flex-between" style="padding:3px 0;"><span>+ Entradas extra</span><span>${fmtMoney(entradas)}</span></div>
+          <div class="flex-between" style="padding:3px 0;"><span>− Gastos</span><span>-${fmtMoney(gastos)}</span></div>
+          <div class="flex-between" style="padding:3px 0;"><span>− Retiros</span><span>-${fmtMoney(retiros)}</span></div>
+          <hr style="border-color:rgba(255,255,255,0.1);margin:4px 0;">
+          <div class="flex-between" style="padding:3px 0;font-weight:bold;"><span>= Efectivo esperado</span><span>${fmtMoney(enCaja)}</span></div>
+          <p class="text-gray" style="margin-top:6px;">Pedidos en efectivo (comida que quedó en caja):</p>
+          ${vs.filter(v=>efectivoEnCajaDe(v)>0).map(v=>`<div class="flex-between" style="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.05);"><span>${escapeHtml(refPedido(v))} ${v.pagos?'(dividido)':''}${v.valorDom?' +dom':''}${v.propina?' +prop':''}</span><span class="text-gold">${fmtMoney(efectivoEnCajaDe(v))}</span></div>`).join('')||'<span class="text-gray">Ninguno</span>'}
+        </div></details>`:''}
       <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openModal('modal-movimiento')">${ic('i-money-out')} Gasto</button>
         ${puedeRetiro?`<button class="btn btn-ghost" onclick="openModalRetiro()">${ic('i-money-out')} Retiro</button>`:''}
