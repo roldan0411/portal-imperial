@@ -51,24 +51,26 @@ function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
-// Efectivo que de verdad queda en caja por una venta.
-// Si hubo pago dividido (v.pagos), cuenta la parte en efectivo.
-// La propina NO queda en caja (se la lleva el mesero), así que se descuenta del efectivo.
+// Efectivo que de verdad SE QUEDA en la caja del negocio por una venta.
+// Solo la COMIDA pagada en efectivo. El domicilio (va al domiciliario), la propina
+// (va al mesero) y el recargo del datáfono NO se quedan en caja: salen al momento.
 function efectivoEnCajaDe(v){
   if(v.estado!=='pagada') return 0;
-  let efectivo=0;
+  let efectivoRecibido=0;
   if(v.pagos && typeof v.pagos==='object'){
-    efectivo = v.pagos.efectivo||0;
+    efectivoRecibido = v.pagos.efectivo||0;
   } else if(v.metodo==='efectivo'){
-    efectivo = (v.totalCobrado!==undefined?v.totalCobrado:v.total);
+    efectivoRecibido = (v.totalCobrado!==undefined?v.totalCobrado:v.total);
   } else {
     return 0;
   }
-  // La propina se le entrega al mesero, no permanece en caja.
-  // Si el total cobrado se pagó en efectivo, la propina salió de ahí.
-  const propina = v.propina||0;
-  efectivo = Math.max(0, efectivo - propina);
-  return efectivo;
+  // Quitar del efectivo recibido lo que NO se queda en caja (sale al momento):
+  // domicilio + propina + recargo. Lo que queda es solo la comida en efectivo.
+  const noSeQueda = (v.valorDom||0) + (v.propina||0) + (v.recargo||0);
+  // El efectivo recibido pudo no cubrir todos esos extras si parte se pagó por otro método,
+  // pero como criterio simple y seguro, restamos lo que salga del efectivo recibido.
+  const efectivoComida = Math.max(0, efectivoRecibido - noSeQueda);
+  return efectivoComida;
 }
 // Cuánto se pagó de una venta con un método específico (respeta pago dividido)
 function montoPorMetodoDe(v, metodo){
@@ -1180,10 +1182,14 @@ function caja(){
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  // Ingresos reales por método (respeta pago dividido)
+  // DINERO que entró por cada método (lo que pagó el cliente, con todo incluido).
+  // Respeta pago dividido: cada método recibe su parte exacta.
   const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=0);
   vs.forEach(v=>{ METODOS_PAGO.forEach(([k])=>{ porMetodo[k]+=montoPorMetodoDe(v,k); }); });
-  const totalV=Object.values(porMetodo).reduce((a,b)=>a+b,0);
+  const totalEntroPorMetodo=Object.values(porMetodo).reduce((a,b)=>a+b,0);
+  // VENTAS REALES = solo la comida (sin domicilio, propina ni recargo)
+  const ventasReales=vs.reduce((a,v)=>a+(v.ventaReal!==undefined?v.ventaReal:v.total),0);
+  const totalV=ventasReales;
   // Conceptos que NO son ingreso del negocio
   const totalPropinas=vs.reduce((a,v)=>a+(v.propina||0),0);
   const totalDomicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
@@ -1192,24 +1198,33 @@ function caja(){
   const entradas=movs.filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=movs.filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=movs.filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
-  // Efectivo en caja: fondo + ventas efectivo + domicilios efectivo + propinas efectivo + recargos efectivo + entradas - gastos - retiros
+  // Efectivo que debe haber en el cajón
   const efectivoVentas=vs.reduce((a,v)=>a+efectivoEnCajaDe(v),0);
   const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros;
   const puedeRetiro = STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
+  // Pedidos pendientes de verificar (Banco/Llave): su dinero aún no cuenta en el cuadre.
+  const porVerificar=(DB.get('ventas')||[]).filter(v=>v.estado==='por_verificar'&&v.cajaId===c.id);
+  const montoPorVerificar=porVerificar.reduce((a,v)=>a+(v.totalCobrado||v.total||0),0);
 
   const cards=METODOS_PAGO.map(([k,l],i)=>{ const colores=['green','blue','gold','red']; return `<div class="stat-card ${colores[i%4]}"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${l}</div><div class="stat-value">${fmtMoney(porMetodo[k])}</div></div>`; }).join('');
 
   return `<div class="stats-grid">${cards}</div>
+  <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} Dinero recibido por cada método de pago (incluye comida, domicilio, propina y recargo). Total recibido: <strong class="text-gold">${fmtMoney(totalEntroPorMetodo)}</strong></p>
+  ${porVerificar.length>0?`<div class="card" style="border:1px solid var(--orange);background:rgba(230,126,34,0.08);">
+    <div class="flex-between"><span class="text-orange font-bold">${ic('i-warning')} ${porVerificar.length} pago(s) SIN verificar — ${fmtMoney(montoPorVerificar)}</span></div>
+    <p class="text-xs text-gray mt-1">Estos pagos (Banco/Llave) todavía NO cuentan en el cuadre porque faltan verificar. Ve a Pedidos y dale "Verificar" a cada uno cuando confirmes el comprobante. Si no los verificas, la caja se descuadra.</p>
+  </div>`:''}
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-cash')} Resumen de Caja — ${escapeHtml(c.cajero)}</div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Apertura</span><span class="text-sm">${fmtDate(c.apertura)}</span></div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Base Inicial</span><strong>${fmtMoney(c.fondo)}</strong></div>
-      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Ventas Reales</span><strong class="text-gold">${fmtMoney(totalV)}</strong></div>
+      <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Ventas Reales (solo comida)</span><strong class="text-gold">${fmtMoney(totalV)}</strong></div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Entradas Extra</span><strong class="text-green">${fmtMoney(entradas)}</strong></div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Gastos / Nómina</span><strong class="text-red">-${fmtMoney(gastos)}</strong></div>
       <div class="flex-between" style="padding:7px 0;"><span>Retiros Autorizados</span><strong class="text-red">-${fmtMoney(retiros)}</strong></div>
       <hr class="divider">
       <div class="flex-between" style="font-size:18px;font-weight:700;"><span>Efectivo en Caja</span><span class="text-gold">${fmtMoney(enCaja)}</span></div>
+      <p class="text-xs text-gray mt-1">Solo el efectivo de la COMIDA que se queda en el cajón (base + comida en efectivo + entradas − gastos − retiros). El domicilio, la propina y el recargo NO cuentan: salen al momento. El dinero de banco/tarjeta/llave tampoco está en el cajón.</p>
       <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openModal('modal-movimiento')">${ic('i-money-out')} Gasto</button>
         ${puedeRetiro?`<button class="btn btn-ghost" onclick="openModalRetiro()">${ic('i-money-out')} Retiro</button>`:''}
