@@ -1362,9 +1362,7 @@ function caja(){
   const retiros=movs.filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
   // Efectivo que debe haber en el cajón
   const efectivoVentas=vs.reduce((a,v)=>a+efectivoEnCajaDe(v),0);
-  // Domicilios pagados al domiciliario en efectivo del cajón (cuando entraron por banco/electrónico)
-  const domiSaleEfectivo=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
-  const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros-domiSaleEfectivo;
+  const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros;
   const puedeRetiro = STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
   // Pedidos pendientes de verificar (Banco/Llave): su dinero aún no cuenta en el cuadre.
   const porVerificar=(DB.get('ventas')||[]).filter(v=>v.estado==='por_verificar'&&v.cajaId===c.id);
@@ -1396,7 +1394,6 @@ function caja(){
           <div class="flex-between" style="padding:3px 0;"><span>+ Entradas extra</span><span>${fmtMoney(entradas)}</span></div>
           <div class="flex-between" style="padding:3px 0;"><span>− Gastos</span><span>-${fmtMoney(gastos)}</span></div>
           <div class="flex-between" style="padding:3px 0;"><span>− Retiros</span><span>-${fmtMoney(retiros)}</span></div>
-          ${domiSaleEfectivo>0?`<div class="flex-between" style="padding:3px 0;color:var(--orange);"><span>− Domicilios por banco (pagados al domiciliario en efectivo)</span><span>-${fmtMoney(domiSaleEfectivo)}</span></div>`:''}
           <hr style="border-color:rgba(255,255,255,0.1);margin:4px 0;">
           <div class="flex-between" style="padding:3px 0;font-weight:bold;"><span>= Efectivo esperado</span><span>${fmtMoney(enCaja)}</span></div>
           <p class="text-gray" style="margin-top:6px;">TODOS los pedidos que recibieron efectivo (para detectar descuadres):</p>
@@ -1564,8 +1561,7 @@ function cerrarCaja(){
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
-  const domiSaleEfectivo=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
-  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros-domiSaleEfectivo;
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
   window._cierreEsperado=esperadoEfectivo;
   document.getElementById('cierre-esperado').textContent=fmtMoney(esperadoEfectivo);
   document.getElementById('cierre-contado').value='';
@@ -1598,10 +1594,9 @@ function confirmarCierre(){
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
-  const domiSaleEfectivo=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
-  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros-domiSaleEfectivo;
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
   const diferencia=contado-esperadoEfectivo;
-  const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,domiSaleEfectivo,
+  const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,
     total:totalVentas, esperadoEfectivo, contadoEfectivo:contado, baseFinal:contado, diferencia, obsCierre:obs, cerradoPor:STATE.user.nombre};
   const cs=DB.get('cierres')||[]; cs.unshift(cierre); DB.set('cierres',cs); DB.set('caja_actual',null);
   // La base del día siguiente DEBE ser lo que quedó contado al cerrar
