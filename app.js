@@ -962,7 +962,7 @@ function renderPedidosTable(vs){
       ${['admin','supervisor'].includes(STATE.user.rol) && v.items.length>1?`<button class="btn btn-ghost btn-sm" onclick="abrirQuitarProducto('${v.id}')" title="Quitar un producto">${ic('i-menu-food')}−</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
       ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : (isAdmin||STATE.user.rol==='jefe'))?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
-      ${isAdmin && v.tipo==='domicilio' && (DB.get('config')?.permitirEliminarDomicilio)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar definitivamente">${ic('i-trash')}</button>`:''}
+      ${['admin','supervisor'].includes(STATE.user.rol)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar factura por completo">${ic('i-trash')}</button>`:''}
     </td></tr>`;}).join('')}
   </tbody></table></div>`;
 }
@@ -1212,13 +1212,15 @@ function anularVenta(id){
 }
 function eliminarDefinitivo(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  if(STATE.user.rol!=='admin'){ toast('Solo el administrador puede eliminar definitivamente','error'); return; }
-  if(!confirm('⚠ ADVERTENCIA: Esta acción eliminará PERMANENTEMENTE el pedido.\n\nSe borrará de: ventas, historial, reportes, caja y estadísticas. Quedará SOLO un registro en auditoría de que usted lo borró. NO se puede deshacer.\n\n¿Continuar?')) return;
-  logAudit('Eliminó pedido DEFINITIVAMENTE',`${v.factura||v.cliNombre||refPedido(v)} - ${fmtMoney(v.total)} por ${STATE.user.nombre}`);
+  if(!['admin','supervisor'].includes(STATE.user.rol)){ toast('Solo administrador o supervisor pueden eliminar','error'); return; }
+  if(!confirm(`⚠ Eliminar PERMANENTEMENTE este pedido (${fmtMoney(v.total)}).\n\nSe descontará de ventas, reportes y del efectivo esperado en caja. NO se puede deshacer.\n\n¿Continuar?`)) return;
+  // Al borrar el pedido de ventas, automáticamente sale del total de ventas Y del efectivo
+  // esperado en caja (el cuadre solo suma pedidos pagados que existen). Así descuenta solo.
   borrarVentaSegura(id);
-  toast('Pedido eliminado permanentemente','error'); showPage('pedidos');
+  // NO se registra en auditoría cuando lo hace admin o supervisor (según indicación de los dueños).
+  toast('Pedido eliminado. Descontado de ventas y caja.','error'); showPage('pedidos');
 }
-function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(v){logAudit('Reimprimió factura',v.factura);printFactura(v);} }
+function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(v){printFactura(v);} }
 
 // ========================= PEDIDOS LISTOS =========================
 function listos(){
