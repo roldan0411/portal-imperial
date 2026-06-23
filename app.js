@@ -1307,12 +1307,26 @@ function caja(){
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  // DINERO que entró por cada método (lo que pagó el cliente, con todo incluido).
-  // Respeta pago dividido: cada método recibe su parte exacta.
+  // VENTA por cada método (solo comida): esto es lo que muestran las tarjetas.
   const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=0);
   vs.forEach(v=>{ METODOS_PAGO.forEach(([k])=>{ porMetodo[k]+=montoPorMetodoDe(v,k); }); });
-  const totalEntroPorMetodo=Object.values(porMetodo).reduce((a,b)=>a+b,0);
-  // VENTAS REALES = solo la comida (sin domicilio, propina ni recargo)
+  const totalVentaPorMetodo=Object.values(porMetodo).reduce((a,b)=>a+b,0);
+  // DOMICILIO y PROPINA recibidos por cada método (lo que entró aparte de la venta).
+  // Esto explica por qué el banco/efectivo real puede ser mayor que la venta.
+  const domPorMetodo={}; const propPorMetodo={};
+  METODOS_PAGO.forEach(([k])=>{ domPorMetodo[k]=0; propPorMetodo[k]=0; });
+  vs.forEach(v=>{
+    // Domicilio que entró por método (solo si entró al restaurante)
+    if(v.valorDom>0 && v.domEntraCaja && v.pagos && v.pagosVenta){
+      METODOS_PAGO.forEach(([k])=>{ const total=v.pagos[k]||0, venta=v.pagosVenta[k]||0; const extra=Math.max(0,total-venta); domPorMetodo[k]+=Math.min(extra, v.valorDom); });
+    }
+    // Propina que entró por método
+    if(v.propina>0 && v.pagos && v.pagosVenta){
+      METODOS_PAGO.forEach(([k])=>{ const total=v.pagos[k]||0, venta=v.pagosVenta[k]||0; const extra=Math.max(0,total-venta); /* el extra restante tras domicilio es propina/recargo */ });
+    }
+  });
+  const totalDomBanco=domPorMetodo['banco']+domPorMetodo['llave']+domPorMetodo['tarjeta'];
+  // VENTAS REALES = solo la comida
   const ventasReales=vs.reduce((a,v)=>a+(v.ventaReal!==undefined?v.ventaReal:v.total),0);
   const totalV=ventasReales;
   // Conceptos que NO son ingreso del negocio
@@ -1334,7 +1348,7 @@ function caja(){
   const cards=METODOS_PAGO.map(([k,l],i)=>{ const colores=['green','blue','gold','red']; return `<div class="stat-card ${colores[i%4]}"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${l}</div><div class="stat-value">${fmtMoney(porMetodo[k])}</div></div>`; }).join('');
 
   return `<div class="stats-grid">${cards}</div>
-  <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} Dinero recibido por cada método de pago (incluye comida, domicilio, propina y recargo). Total recibido: <strong class="text-gold">${fmtMoney(totalEntroPorMetodo)}</strong></p>
+  <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} VENTA (solo comida) recibida por cada método. Total venta: <strong class="text-gold">${fmtMoney(totalVentaPorMetodo)}</strong>. ${totalDomBanco>0?`Además entraron <strong>${fmtMoney(totalDomBanco)}</strong> de domicilios por banco/transferencia (se le pagan al domiciliario).`:''}</p>
   ${porVerificar.length>0?`<div class="card" style="border:1px solid var(--orange);background:rgba(230,126,34,0.08);">
     <div class="flex-between"><span class="text-orange font-bold">${ic('i-warning')} ${porVerificar.length} pago(s) SIN verificar — ${fmtMoney(montoPorVerificar)}</span></div>
     <p class="text-xs text-gray mt-1">Estos pagos (Banco/Llave) todavía NO cuentan en el cuadre porque faltan verificar. Ve a Pedidos y dale "Verificar" a cada uno cuando confirmes el comprobante. Si no los verificas, la caja se descuadra.</p>
