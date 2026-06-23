@@ -1373,15 +1373,17 @@ function caja(){
           <div class="flex-between" style="padding:3px 0;"><span>− Retiros</span><span>-${fmtMoney(retiros)}</span></div>
           <hr style="border-color:rgba(255,255,255,0.1);margin:4px 0;">
           <div class="flex-between" style="padding:3px 0;font-weight:bold;"><span>= Efectivo esperado</span><span>${fmtMoney(enCaja)}</span></div>
-          <p class="text-gray" style="margin-top:6px;">Pedidos en efectivo (comida que quedó en caja):</p>
-          ${vs.filter(v=>efectivoEnCajaDe(v)>0).map(v=>{
+          <p class="text-gray" style="margin-top:6px;">TODOS los pedidos que recibieron efectivo (para detectar descuadres):</p>
+          ${vs.filter(v=>{ const ef=v.pagos?(v.pagos.efectivo||0):(v.metodo==='efectivo'?(v.totalCobrado||v.total):0); return ef>0; }).map(v=>{
             const comida=(v.ventaReal!==undefined?v.ventaReal:v.total)||0;
-            const ef=v.pagos?(v.pagos.efectivo||0):(v.metodo==='efectivo'?(v.totalCobrado||v.total):0);
+            const efRecibido=v.pagos?(v.pagos.efectivo||0):(v.metodo==='efectivo'?(v.totalCobrado||v.total):0);
+            const efCuenta=efectivoEnCajaDe(v);
             const ba=v.pagos?(v.pagos.banco||0):0;
-            const ta=v.pagos?(v.pagos.tarjeta||0):0;
-            return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-              <div class="flex-between"><span>${escapeHtml(refPedido(v))}</span><span class="text-gold">cuenta ${fmtMoney(efectivoEnCajaDe(v))}</span></div>
-              <div class="text-gray" style="font-size:10px;">comida ${fmtMoney(comida)} · dom ${fmtMoney(v.valorDom||0)} · prop ${fmtMoney(v.propina||0)} | pagó: efec ${fmtMoney(ef)}${ba?' · banco '+fmtMoney(ba):''}${ta?' · tarj '+fmtMoney(ta):''}</div>
+            const dif=efRecibido-efCuenta-(v.valorDom||0)-(v.propina||0)-(v.recargo||0);
+            const alerta = Math.abs(dif)>1;
+            return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.05);${alerta?'background:rgba(231,76,60,0.12);':''}">
+              <div class="flex-between"><span>${escapeHtml(refPedido(v))}${alerta?' ⚠':''}</span><span class="text-gold">caja cuenta ${fmtMoney(efCuenta)}</span></div>
+              <div class="text-gray" style="font-size:10px;">comida ${fmtMoney(comida)} · dom ${fmtMoney(v.valorDom||0)} · prop ${fmtMoney(v.propina||0)} · recibió efectivo ${fmtMoney(efRecibido)}${ba?' · banco '+fmtMoney(ba):''}${alerta?' · ⚠ DESCUADRE '+fmtMoney(dif):''}</div>
             </div>`;
           }).join('')||'<span class="text-gray">Ninguno</span>'}
         </div></details>`:''}
