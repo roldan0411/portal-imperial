@@ -51,58 +51,51 @@ function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
-// Domicilio que entró por método electrónico (banco/tarjeta/llave) y por tanto se le
-// paga al domiciliario sacando EFECTIVO del cajón. Esto SIEMPRE sale del efectivo.
-// Detección robusta: no depende de marcas que se puedan perder. Mira los pagos reales:
-// si el domicilio NO se pagó en efectivo directo, entonces entró por electrónico.
-function domicilioSalidaEfectivo(v){
-  if(v.estado!=='pagada') return 0;
-  const dom=v.valorDom||0;
-  if(dom<=0) return 0;
-  // Si el domicilio se pagó en efectivo DIRECTO al domiciliario, no sale del cajón (regla del usuario).
-  if(v.domFormaPago==='efectivo_directo') return 0;
-  // Si está marcado que entra a caja (por banco), sale del cajón al pagar al domiciliario.
-  if(v.domEntraCaja) return dom;
-  // Respaldo: si no hay marca pero el pedido se pagó total o parcialmente por electrónico
-  // y el efectivo recibido no alcanza a cubrir comida+domicilio, el domicilio entró por banco.
-  if(v.pagos && typeof v.pagos==='object'){
-    const electronico=(v.pagos.banco||0)+(v.pagos.tarjeta||0)+(v.pagos.llave||0);
-    const efectivo=(v.pagos.efectivo||0);
-    const comida=(v.ventaReal!==undefined?v.ventaReal:v.total)||0;
-    // Si entró algo por electrónico y el efectivo no cubre toda la comida, el domicilio fue electrónico
-    if(electronico>0 && efectivo<=comida) return dom;
-  }
-  return 0;
-}
-// Efectivo que SE QUEDA en la caja del negocio: solo la parte de VENTA (comida) pagada
-// en efectivo. El domicilio en efectivo va al domiciliario (no entra). Propina y recargo
-// no se quedan en caja, pero como el efectivo de venta ya excluye el domicilio, contamos
-// la venta en efectivo. (La propina en efectivo se le entrega al mesero: se descuenta abajo.)
+// ============================================================
+// MÓDULO DE PAGOS Y CAJA — RECONSTRUIDO LIMPIO (v2)
+// ============================================================
+// REGLAS (confirmadas por el dueño):
+// 1. Venta (comida): es el ingreso del negocio. Se reparte entre métodos.
+// 2. Propina: va al mesero. NO entra a caja, NO suma a ventas.
+// 3. Recargo datáfono: cubre el datáfono. NO entra a caja, NO es del negocio.
+// 4. Domicilio EN EFECTIVO: el cliente le paga directo al domiciliario. NO entra a caja.
+// 5. Domicilio POR BANCO: entra al banco; se le paga al domiciliario en EFECTIVO del cajón
+//    → ese efectivo SALE de la caja (se descuenta automáticamente).
+//
+// Cada venta pagada guarda:
+//   v.comida      = valor de la comida (= v.total)
+//   v.propina     = propina (al mesero)
+//   v.recargo     = recargo datáfono
+//   v.valorDom    = valor del domicilio
+//   v.domPorBanco = true si el domicilio entró por banco (se paga al domiciliario en efectivo)
+//   v.pagosVenta  = {efectivo,banco,tarjeta} → reparto SOLO de la comida por método
+//   v.pagosExtra  = {efectivo,banco,tarjeta} → reparto de propina+recargo+domicilio-banco por método
+
+// Efectivo (de COMIDA) que se queda en el cajón por esta venta.
 function efectivoEnCajaDe(v){
   if(v.estado!=='pagada') return 0;
-  // Parte de la VENTA pagada en efectivo (sin domicilio)
-  let efectivoVenta=0;
-  if(v.pagosVenta && typeof v.pagosVenta==='object'){
-    efectivoVenta = v.pagosVenta.efectivo||0;
-  } else if(v.pagos && typeof v.pagos==='object'){
-    efectivoVenta = v.pagos.efectivo||0;
-  } else if(v.metodo==='efectivo'){
-    efectivoVenta = v.total||0;
-  } else {
-    return 0;
-  }
-  return Math.max(0, efectivoVenta);
+  if(v.pagosVenta && typeof v.pagosVenta==='object') return v.pagosVenta.efectivo||0;
+  // Respaldo para ventas viejas
+  if(v.pagos && typeof v.pagos==='object') return v.pagos.efectivo||0;
+  if(v.metodo==='efectivo') return v.total||0;
+  return 0;
 }
-// Cuánto se recibió por VENTA (comida+propina+recargo) en un método específico.
-// Usa pagosVenta (ya tiene el domicilio descontado) para no inflar caja/banco.
+// Venta (comida) recibida por un método específico. Esto es lo que muestran las tarjetas.
 function montoPorMetodoDe(v, metodo){
   if(v.estado!=='pagada') return 0;
-  if(v.pagosVenta && typeof v.pagosVenta==='object'){ return v.pagosVenta[metodo]||0; }
-  if(v.pagos && typeof v.pagos==='object'){ return v.pagos[metodo]||0; }
-  return v.metodo===metodo ? (v.totalCobrado!==undefined?v.totalCobrado:v.total) : 0;
+  if(v.pagosVenta && typeof v.pagosVenta==='object') return v.pagosVenta[metodo]||0;
+  if(v.pagos && typeof v.pagos==='object') return v.pagos[metodo]||0;
+  return v.metodo===metodo ? (v.total||0) : 0;
 }
-// Métodos de pago del sistema (centralizados)
-const METODOS_PAGO = [['efectivo','Efectivo'],['banco','Banco'],['tarjeta','Tarjeta'],['llave','Llave']];
+// Domicilio que entró por banco y se le pagó al domiciliario en efectivo del cajón.
+// Ese efectivo SALE de la caja, así que se descuenta del efectivo esperado.
+function domicilioSalidaEfectivo(v){
+  if(v.estado!=='pagada') return 0;
+  if(v.valorDom>0 && v.domPorBanco) return v.valorDom;
+  return 0;
+}
+// Métodos de pago del sistema (solo los que usa el negocio: Efectivo, Banco, Tarjeta)
+const METODOS_PAGO = [['efectivo','Efectivo'],['banco','Banco'],['tarjeta','Tarjeta']];
 function opcionesMetodo(sel){ return METODOS_PAGO.map(([v,l])=>`<option value="${v}" ${sel===v?'selected':''}>${l}</option>`).join(''); }
 function nombreMetodo(m){ const f=METODOS_PAGO.find(x=>x[0]===m); return f?f[1]:(m||'—'); }
 
@@ -1014,44 +1007,42 @@ function quitarProductoPedido(ventaId, itemIdx){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===ventaId); if(!v) return;
   const item=v.items[itemIdx]; if(!item) return;
   if(v.items.length<=1){ toast('No se puede quitar el único producto. Mejor anule el pedido.','error'); return; }
-  if(!confirm(`¿Quitar "${item.nombre}" (${fmtMoney(item.precio*item.qty)}) del pedido?\n\nEl total se recalcula y se ajustan los pagos. Queda en auditoría.`)) return;
+  if(!confirm(`¿Quitar "${item.nombre}" (${fmtMoney(item.precio*item.qty)}) del pedido?\n\nEl total y los pagos se recalculan automáticamente.`)) return;
 
-  const totalAntes=v.total||0;
-  // Quitar el item
+  // Quitar el item y recalcular la comida (total)
   v.items.splice(itemIdx,1);
-  // Recalcular subtotal/total (solo comida)
   const nuevoSubtotal=v.items.reduce((a,i)=>a+i.precio*i.qty,0);
   v.subtotal=nuevoSubtotal;
   const desc=v.descuento||0;
   v.total=Math.max(0, nuevoSubtotal-desc);
+  v.comida=v.total;
   v.ventaReal=v.total;
 
-  // Si ya estaba pagado, ajustar los métodos de pago proporcionalmente a la nueva venta
+  // Si ya estaba pagado/por verificar, reajustar el reparto de la COMIDA (pagosVenta)
+  // proporcionalmente al nuevo total. pagosExtra (propina/recargo/domicilio) NO cambia.
   if((v.estado==='pagada'||v.estado==='por_verificar') && v.pagosVenta){
     const totalVentaAntes=Object.values(v.pagosVenta).reduce((a,b)=>a+b,0);
     if(totalVentaAntes>0){
       const factor=v.total/totalVentaAntes;
-      const nuevos={}; let suma=0;
+      const nuevos={efectivo:0,tarjeta:0,banco:0}; let suma=0;
       Object.keys(v.pagosVenta).forEach(k=>{ nuevos[k]=Math.round((v.pagosVenta[k]||0)*factor); suma+=nuevos[k]; });
-      // Ajustar redondeo para que cuadre exacto con el nuevo total
+      // Ajustar el redondeo para que cuadre exacto con el nuevo total de comida
       const dif=v.total-suma;
       if(dif!==0){ const kMax=Object.keys(nuevos).sort((a,b)=>nuevos[b]-nuevos[a])[0]; nuevos[kMax]+=dif; }
       v.pagosVenta=nuevos;
-      // Reconstruir v.pagos = venta + lo que era domicilio/propina (se mantienen)
-      const extraNoVenta={}; METODOS_PAGO.forEach(([k])=>extraNoVenta[k]=Math.max(0,(v.pagos?.[k]||0)-(0)));
-      // pagos totales = pagosVenta + domicilio(si entró) + propina + recargo; recalculamos simple:
-      v.pagos={...nuevos};
-      // re-sumar lo que no es venta (domicilio que entró a caja, propina, recargo) al método que ya tenían
-      // (para mantener consistencia, lo dejamos en efectivo por defecto si existía)
+      // pagos total = pagosVenta (comida) + pagosExtra (propina+recargo+domicilio)
+      const ex=v.pagosExtra||{efectivo:0,tarjeta:0,banco:0};
+      v.pagos={ efectivo:(nuevos.efectivo||0)+(ex.efectivo||0), tarjeta:(nuevos.tarjeta||0)+(ex.tarjeta||0), banco:(nuevos.banco||0)+(ex.banco||0) };
+      v.totalCobrado=Object.values(v.pagos).reduce((a,b)=>a+b,0);
+      v.metodo=Object.entries(v.pagosVenta).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo';
     }
-    v.totalCobrado=v.total + (v.domEntraCaja?(v.valorDom||0):0) + (v.propina||0) + (v.recargo||0);
   }
 
   v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
-  v.productoQuitado=(v.productoQuitado||[]); v.productoQuitado.push({nombre:item.nombre,valor:item.precio*item.qty,por:STATE.user.nombre,fecha:now()});
+  // NO se registra en auditoría cuando lo hace admin/supervisor (indicación de los dueños).
   fusionarYGuardarVentas(vs);
   toast(`Producto quitado. Nuevo total: ${fmtMoney(v.total)}`,'success');
-  // reimprimir comanda con el cambio
+  // Reimprimir comanda con el cambio
   v.ticketImpreso=false; v.reimpreso=(v.reimpreso||0)+1;
   try{ printTicketCocina(v); }catch(e){}
   closeModal('modal-quitarprod');
@@ -1070,50 +1061,55 @@ function editarPedido(id){
   showPage('ventas');
 }
 
-let cobrandoMesaId=null, cobroBaseTotal=0, cobroTotalCliente=0;
+let cobrandoMesaId=null, cobroComida=0, cobroTotalCliente=0;
 function abrirCobroMesa(id){
   if(STATE.user.rol==='mesero' || STATE.user.rol==='impresiones'){ toast('Este usuario no puede cobrar. El cajero realiza el cobro.','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  cobrandoMesaId=id; cobroBaseTotal=v.total;
+  cobrandoMesaId=id; cobroComida=v.total||0;
   const ref = v.tipo==='mesa'?v.mesa : (v.cliNombre||refCocina(v));
   const extra = v.valorDom>0?` + domicilio ${fmtMoney(v.valorDom)}`:'';
-  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(ref)}</strong> · ${v.items.length} platos · Venta <span class="text-gold font-bold">${fmtMoney(v.total)}</span>${extra}`;
-  ['cobro-propina','cobro-recargo','pago-efectivo','pago-tarjeta','pago-banco','pago-llave'].forEach(i=>{ const el=document.getElementById(i); if(el) el.value=''; });
+  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(ref)}</strong> · ${v.items.length} platos · Comida <span class="text-gold font-bold">${fmtMoney(v.total)}</span>${extra}`;
+  ['cobro-propina','cobro-recargo','pago-efectivo','pago-tarjeta','pago-banco'].forEach(i=>{ const el=document.getElementById(i); if(el) el.value=''; });
   document.getElementById('cobro-propina').value=0;
   document.getElementById('cobro-recargo').value=0;
   const domFormaEl=document.getElementById('cobro-dom-forma'); if(domFormaEl) domFormaEl.value='efectivo_directo';
   openModal('modal-cobro');
   actualizarTotalCobro();
 }
+// Calcula el TOTAL que el cliente debe pagar en caja según las reglas.
 function actualizarTotalCobro(){
   const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
   const recargo=parseFloat(document.getElementById('cobro-recargo')?.value)||0;
   const v=(DB.get('ventas')||[]).find(x=>x.id===cobrandoMesaId);
   const dom=v?(v.valorDom||0):0;
-  // Mostrar el cuadro de domicilio solo si hay domicilio
+  // Cuadro de domicilio: solo si hay domicilio
   const domBox=document.getElementById('cobro-domicilio-box');
-  if(domBox){ domBox.style.display = dom>0 ? 'block':'none'; }
+  if(domBox) domBox.style.display = dom>0 ? 'block':'none';
   const domValorSpan=document.getElementById('cobro-dom-valor'); if(domValorSpan) domValorSpan.textContent=fmtMoney(dom);
-  // Forma de pago del domicilio
   const domForma=document.getElementById('cobro-dom-forma')?.value||'efectivo_directo';
-  // Si el domicilio lo paga el cliente DIRECTO al domiciliario en efectivo, NO entra a la caja:
-  // entonces NO se incluye en el total a cobrar por caja.
-  const domEnCaja = (dom>0 && domForma==='restaurante') ? dom : 0;
-  cobroTotalCliente=cobroBaseTotal+domEnCaja+propina+recargo;
+  // REGLA: el domicilio EN EFECTIVO no entra a caja (lo cobra el domiciliario directo).
+  // El domicilio POR BANCO sí entra (el cliente lo transfiere junto con la comida).
+  const domEnTotal = (dom>0 && domForma==='banco') ? dom : 0;
+  // Ayuda visual
+  const ayuda=document.getElementById('cobro-dom-ayuda');
+  if(ayuda){ ayuda.textContent = domForma==='banco'
+    ? 'El cliente transfiere comida + domicilio. Luego le pagas al domiciliario en efectivo del cajón (el sistema lo descuenta solo).'
+    : 'El cliente le paga el domicilio en efectivo al domiciliario. No pasa por la caja.'; }
+  // Total a cobrar = comida + propina + recargo + (domicilio solo si es por banco)
+  cobroTotalCliente = cobroComida + propina + recargo + domEnTotal;
   const el=document.getElementById('cobro-total-final');
   if(el) el.textContent=fmtMoney(cobroTotalCliente);
   const queCobrar=document.getElementById('cobro-que-cobrar');
-  if(queCobrar){ queCobrar.textContent = domEnCaja>0?'(comida + domicilio + extras)':(dom>0?'(solo comida + extras; el domicilio lo cobra el domiciliario)':'(comida + extras)'); }
+  if(queCobrar) queCobrar.textContent = dom>0 ? (domEnTotal>0?'(comida + domicilio + extras)':'(comida + extras; domicilio aparte)') : '';
   actualizarRepartoCobro();
 }
+// Verifica que lo repartido en métodos cuadre con el total a cobrar.
 function actualizarRepartoCobro(){
   const ef=parseFloat(document.getElementById('pago-efectivo')?.value)||0;
   const ta=parseFloat(document.getElementById('pago-tarjeta')?.value)||0;
   const ba=parseFloat(document.getElementById('pago-banco')?.value)||0;
-  const ll=parseFloat(document.getElementById('pago-llave')?.value)||0;
-  const suma=ef+ta+ba+ll;
+  const suma=ef+ta+ba;
   const msg=document.getElementById('cobro-reparto-msg');
-  const btn=document.getElementById('btn-confirmar-cobro');
   if(!msg) return;
   const falta=cobroTotalCliente-suma;
   if(suma===0){ msg.innerHTML='<span class="text-gray">Escriba cómo paga el cliente</span>'; }
@@ -1121,15 +1117,15 @@ function actualizarRepartoCobro(){
   else if(falta>0){ msg.innerHTML=`<span class="text-gold">Falta ${fmtMoney(falta)}</span>`; }
   else { msg.innerHTML=`<span class="text-red">Sobra ${fmtMoney(Math.abs(falta))} (revise)</span>`; }
 }
+// Confirma el cobro: separa comida, propina, recargo y domicilio en sus métodos.
 function confirmarCobroMesa(){
   const id=cobrandoMesaId; if(!id) return;
   const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
   const recargo=parseFloat(document.getElementById('cobro-recargo')?.value)||0;
   const pagos={ efectivo:parseFloat(document.getElementById('pago-efectivo')?.value)||0,
     tarjeta:parseFloat(document.getElementById('pago-tarjeta')?.value)||0,
-    banco:parseFloat(document.getElementById('pago-banco')?.value)||0,
-    llave:parseFloat(document.getElementById('pago-llave')?.value)||0 };
-  const suma=pagos.efectivo+pagos.tarjeta+pagos.banco+pagos.llave;
+    banco:parseFloat(document.getElementById('pago-banco')?.value)||0 };
+  const suma=pagos.efectivo+pagos.tarjeta+pagos.banco;
   if(suma<=0){ toast('Indique cómo paga el cliente','error'); return; }
   if(Math.abs(cobroTotalCliente-suma)>=1){ toast('Lo pagado no cuadra con el total a cobrar','error'); return; }
   const vs=DB.get('ventas')||[];
@@ -1137,72 +1133,53 @@ function confirmarCobroMesa(){
   const dom=v.valorDom||0;
   const domForma=document.getElementById('cobro-dom-forma')?.value||'efectivo_directo';
   const comida=v.total||0;
+  const domPorBanco = (dom>0 && domForma==='banco');
 
-  // ===== REGLA DE ORO (POS profesional) =====
-  // Se separan 3 conceptos: VENTA (comida), PROPINA, DOMICILIO. Y los métodos de pago.
-  // El dinero recibido cubre PRIMERO la venta+propina+recargo; el resto es domicilio.
-  // El domicilio NUNCA es ingreso del restaurante (va al domiciliario).
-
-  // 1) Si el domicilio se paga en efectivo DIRECTO al domiciliario, no está dentro de 'pagos'
-  //    (el total a cobrar ya lo excluyó). domEntraCaja = false.
-  // 2) Si el domicilio entra al restaurante (banco), está dentro de 'pagos' y hay que
-  //    descontarlo de los métodos para no inflar caja/banco como venta.
-  const domEntraCaja = (dom>0 && domForma==='restaurante');
-
-  // pagosVenta = lo que de cada método corresponde SOLO a la COMIDA (venta del restaurante).
-  // Se descuenta del pago: primero el domicilio (si entró por método), luego propina y recargo,
-  // que no son ingreso del restaurante y no deben quedar como "venta" en caja/banco.
-  let pagosVenta = { efectivo:pagos.efectivo, tarjeta:pagos.tarjeta, banco:pagos.banco, llave:pagos.llave };
-  let domiciliarioRecibe = 0;
-
-  // Quitar del reparto lo que NO es comida: domicilio (si entró), propina y recargo.
-  // Orden de descuento: para domicilio por banco, quitar de electrónicos primero.
-  // Para propina/recargo, quitar de efectivo primero (lo más común que se entrega al momento).
-  function quitarDeMetodos(monto, orden){
-    let restante=monto;
-    for(const k of orden){
-      if(restante<=0) break;
-      const quita=Math.min(pagosVenta[k], restante);
-      pagosVenta[k]-=quita; restante-=quita;
-    }
+  // ===== SEPARACIÓN DE CONCEPTOS (POS profesional) =====
+  // El total recibido = comida + propina + recargo + (domicilio si es por banco).
+  // Repartimos cada peso a su concepto. La COMIDA se cubre primero, en orden:
+  // efectivo → tarjeta → banco. El resto (propina+recargo+domicilio) es "extra" (no del negocio).
+  let restante={ efectivo:pagos.efectivo, tarjeta:pagos.tarjeta, banco:pagos.banco };
+  const pagosVenta={ efectivo:0, tarjeta:0, banco:0 }; // solo comida
+  // Cubrir la comida tomando de cada método disponible
+  let porCubrir=comida;
+  for(const k of ['efectivo','tarjeta','banco']){
+    if(porCubrir<=0) break;
+    const toma=Math.min(restante[k], porCubrir);
+    pagosVenta[k]+=toma; restante[k]-=toma; porCubrir-=toma;
   }
-  if(dom>0 && domEntraCaja){
-    quitarDeMetodos(dom, ['banco','llave','tarjeta','efectivo']);
-    domiciliarioRecibe=dom;
-  }
-  // Propina y recargo: descontar para que pagosVenta sea SOLO comida
-  if(propina>0) quitarDeMetodos(propina, ['efectivo','banco','llave','tarjeta']);
-  if(recargo>0) quitarDeMetodos(recargo, ['tarjeta','banco','llave','efectivo']);
+  // Lo que queda en 'restante' es propina + recargo + domicilio-banco (no es venta del negocio)
+  const pagosExtra={ efectivo:restante.efectivo, tarjeta:restante.tarjeta, banco:restante.banco };
 
   // Guardar todo separado y claro
-  v.ventaReal=comida;                 // venta del restaurante (solo comida)
-  v.propina=propina;                  // va al módulo de propinas
-  v.recargo=recargo;                  // recargo datáfono
+  v.comida=comida;
+  v.ventaReal=comida;        // compatibilidad con reportes existentes
+  v.propina=propina;         // va al mesero
+  v.recargo=recargo;         // recargo datáfono (no es del negocio)
+  v.valorDom=dom;
   v.domFormaPago = dom>0 ? domForma : null;
-  v.domEntraCaja = domEntraCaja;
-  v.domiciliarioRecibe = domiciliarioRecibe;
-  v.totalCobrado = comida + (domEntraCaja?dom:0) + propina + recargo; // lo que pasó por caja
-  v.pagos = pagos;          // lo que el cliente puso en cada método (total)
-  v.pagosVenta = pagosVenta; // lo que de cada método corresponde a VENTA (sin domicilio)
-  v.metodo=Object.entries(pagos).sort((a,b)=>b[1]-a[1])[0][0];
+  v.domPorBanco = domPorBanco;   // si entró por banco → se paga al domiciliario en efectivo
+  v.pagos=pagos;             // total que puso el cliente por método
+  v.pagosVenta=pagosVenta;   // SOLO comida por método (lo que es venta real)
+  v.pagosExtra=pagosExtra;   // propina+recargo+domicilio por método
+  v.totalCobrado=suma;
+  v.metodo=Object.entries(pagosVenta).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo';
   v.fechaCobro=now(); v.cobradoPor=STATE.user.nombre;
   v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
   if(!v.factura && v.tipo!=='domicilio') v.factura=nextFactura();
 
-  // Banco o Llave con monto => queda PENDIENTE de verificación
-  const requiereVerif = pagos.banco>0 || pagos.llave>0;
+  // Si entró dinero por banco, queda PENDIENTE de verificar el comprobante
+  const requiereVerif = pagos.banco>0;
   if(requiereVerif){
     v.estado='por_verificar';
     fusionarYGuardarVentas(vs);
-    logAudit('Cobro pendiente de verificar',`${v.factura||v.cliNombre} - banco/llave`);
     closeModal('modal-cobro'); cobrandoMesaId=null;
-    toast('Pago registrado. Pendiente de verificar el comprobante (Banco/Llave).','info');
+    toast('Pago registrado. Verifica el comprobante del Banco en Pedidos.','info');
     showPage('pedidos'); return;
   }
   v.estado='pagada';
   fusionarYGuardarVentas(vs);
   const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre);
-  logAudit('Cobró pedido',`${ref} - venta ${fmtMoney(v.ventaReal)}${propina>0?' propina '+fmtMoney(propina):''}${dom>0?' domicilio '+fmtMoney(dom)+' ('+domForma+')':''}`);
   closeModal('modal-cobro'); cobrandoMesaId=null;
   toast(`${ref} cobrada`,'success');
   printFactura(v);
@@ -1210,10 +1187,9 @@ function confirmarCobroMesa(){
 }
 function verificarPago(id){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
-  if(!confirm('¿Confirma que ya verificó el comprobante de pago (Banco/Llave) y el dinero está recibido?')) return;
+  if(!confirm('¿Confirma que ya verificó el comprobante de pago (Banco) y el dinero está recibido?')) return;
   v.estado='pagada'; v.verificadoPor=STATE.user.nombre; v.fechaVerif=now();
   fusionarYGuardarVentas(vs);
-  logAudit('Verificó pago',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`);
   toast('Pago verificado','success');
   printFactura(v);
   showPage('pedidos');
@@ -1330,48 +1306,37 @@ function caja(){
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
-  // VENTA por cada método (solo comida): esto es lo que muestran las tarjetas.
+  // VENTA (solo comida) por cada método: esto es lo que muestran las tarjetas.
   const porMetodo={}; METODOS_PAGO.forEach(([k])=>porMetodo[k]=0);
   vs.forEach(v=>{ METODOS_PAGO.forEach(([k])=>{ porMetodo[k]+=montoPorMetodoDe(v,k); }); });
   const totalVentaPorMetodo=Object.values(porMetodo).reduce((a,b)=>a+b,0);
-  // DOMICILIO y PROPINA recibidos por cada método (lo que entró aparte de la venta).
-  // Esto explica por qué el banco/efectivo real puede ser mayor que la venta.
-  const domPorMetodo={}; const propPorMetodo={};
-  METODOS_PAGO.forEach(([k])=>{ domPorMetodo[k]=0; propPorMetodo[k]=0; });
-  vs.forEach(v=>{
-    // Domicilio que entró por método (solo si entró al restaurante)
-    if(v.valorDom>0 && v.domEntraCaja && v.pagos && v.pagosVenta){
-      METODOS_PAGO.forEach(([k])=>{ const total=v.pagos[k]||0, venta=v.pagosVenta[k]||0; const extra=Math.max(0,total-venta); domPorMetodo[k]+=Math.min(extra, v.valorDom); });
-    }
-    // Propina que entró por método
-    if(v.propina>0 && v.pagos && v.pagosVenta){
-      METODOS_PAGO.forEach(([k])=>{ const total=v.pagos[k]||0, venta=v.pagosVenta[k]||0; const extra=Math.max(0,total-venta); /* el extra restante tras domicilio es propina/recargo */ });
-    }
-  });
-  const totalDomBanco=domPorMetodo['banco']+domPorMetodo['llave']+domPorMetodo['tarjeta'];
   // VENTAS REALES = solo la comida
   const ventasReales=vs.reduce((a,v)=>a+(v.ventaReal!==undefined?v.ventaReal:v.total),0);
   const totalV=ventasReales;
-  // Conceptos que NO son ingreso del negocio
+  // Conceptos que NO son ingreso del negocio (van a terceros)
   const totalPropinas=vs.reduce((a,v)=>a+(v.propina||0),0);
   const totalDomicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
   const totalRecargos=vs.reduce((a,v)=>a+(v.recargo||0),0);
+  // Domicilios que entraron por banco (el restaurante se los paga al domiciliario en efectivo)
+  const totalDomBanco=vs.reduce((a,v)=>a+(v.domPorBanco?(v.valorDom||0):0),0);
   // Movimientos de caja
   const entradas=movs.filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=movs.filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=movs.filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
   // Efectivo que debe haber en el cajón
   const efectivoVentas=vs.reduce((a,v)=>a+efectivoEnCajaDe(v),0);
-  const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros;
+  // Domicilios por banco: se le pagan al domiciliario en EFECTIVO del cajón → ese efectivo SALE.
+  const domiBanco=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
+  const enCaja=c.fondo+efectivoVentas+entradas-gastos-retiros-domiBanco;
   const puedeRetiro = STATE.user.rol==='admin'||STATE.user.rol==='supervisor';
-  // Pedidos pendientes de verificar (Banco/Llave): su dinero aún no cuenta en el cuadre.
+  // Pedidos pendientes de verificar (Banco): su dinero aún no cuenta en el cuadre.
   const porVerificar=(DB.get('ventas')||[]).filter(v=>v.estado==='por_verificar'&&v.cajaId===c.id);
   const montoPorVerificar=porVerificar.reduce((a,v)=>a+(v.totalCobrado||v.total||0),0);
 
-  const cards=METODOS_PAGO.map(([k,l],i)=>{ const colores=['green','blue','gold','red']; return `<div class="stat-card ${colores[i%4]}"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${l}</div><div class="stat-value">${fmtMoney(porMetodo[k])}</div></div>`; }).join('');
+  const cards=METODOS_PAGO.map(([k,l],i)=>{ const colores=['green','blue','gold']; return `<div class="stat-card ${colores[i%3]}"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${l}</div><div class="stat-value">${fmtMoney(porMetodo[k])}</div></div>`; }).join('');
 
   return `<div class="stats-grid">${cards}</div>
-  <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} VENTA (solo comida) recibida por cada método. Total venta: <strong class="text-gold">${fmtMoney(totalVentaPorMetodo)}</strong>. ${totalDomBanco>0?`Además entraron <strong>${fmtMoney(totalDomBanco)}</strong> de domicilios por banco/transferencia (se le pagan al domiciliario).`:''}</p>
+  <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} VENTA (solo comida) recibida por cada método. Total venta: <strong class="text-gold">${fmtMoney(totalVentaPorMetodo)}</strong>.${totalDomBanco>0?` Además entraron <strong>${fmtMoney(totalDomBanco)}</strong> de domicilios por banco (se le pagan al domiciliario en efectivo).`:''}</p>
   ${porVerificar.length>0?`<div class="card" style="border:1px solid var(--orange);background:rgba(230,126,34,0.08);">
     <div class="flex-between"><span class="text-orange font-bold">${ic('i-warning')} ${porVerificar.length} pago(s) SIN verificar — ${fmtMoney(montoPorVerificar)}</span></div>
     <p class="text-xs text-gray mt-1">Estos pagos (Banco/Llave) todavía NO cuentan en el cuadre porque faltan verificar. Ve a Pedidos y dale "Verificar" a cada uno cuando confirmes el comprobante. Si no los verificas, la caja se descuadra.</p>
@@ -1386,7 +1351,7 @@ function caja(){
       <div class="flex-between" style="padding:7px 0;"><span>Retiros Autorizados</span><strong class="text-red">-${fmtMoney(retiros)}</strong></div>
       <hr class="divider">
       <div class="flex-between" style="font-size:18px;font-weight:700;"><span>Efectivo en Caja</span><span class="text-gold">${fmtMoney(enCaja)}</span></div>
-      <p class="text-xs text-gray mt-1">Efectivo del cajón: base + comida en efectivo + entradas − gastos − retiros. El domicilio, propina y recargo no se quedan en caja. El banco/tarjeta/llave tampoco está en el cajón.</p>
+      <p class="text-xs text-gray mt-1">Efectivo del cajón: base + comida en efectivo + entradas − gastos − retiros${domiBanco>0?' − domicilios por banco ('+fmtMoney(domiBanco)+', pagados al domiciliario en efectivo)':''}. Propina, recargo y domicilio en efectivo no entran a caja. El banco/tarjeta tampoco está en el cajón.</p>
       ${STATE.user.rol==='admin'?`<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--gold);">🔍 Ver desglose del efectivo (diagnóstico)</summary>
         <div style="margin-top:8px;font-size:11px;">
           <div class="flex-between" style="padding:3px 0;"><span>Base inicial</span><span>${fmtMoney(c.fondo)}</span></div>
@@ -1561,7 +1526,8 @@ function cerrarCaja(){
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
-  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
+  const domiBanco=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros-domiBanco;
   window._cierreEsperado=esperadoEfectivo;
   document.getElementById('cierre-esperado').textContent=fmtMoney(esperadoEfectivo);
   document.getElementById('cierre-contado').value='';
@@ -1594,9 +1560,10 @@ function confirmarCierre(){
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
   const gastos=(c.movimientos||[]).filter(m=>m.tipo==='salida'||m.tipo==='gasto'||m.tipo==='nomina').reduce((a,m)=>a+m.monto,0);
   const retiros=(c.movimientos||[]).filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
-  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros;
+  const domiBanco=vs.reduce((a,v)=>a+domicilioSalidaEfectivo(v),0);
+  const esperadoEfectivo=c.fondo+efectivoVentas+entradas-gastos-retiros-domiBanco;
   const diferencia=contado-esperadoEfectivo;
-  const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,
+  const cierre={...c,cierre:now(),porMetodo,gastos,entradas,retiros,propinas,domicilios,recargos,domiBanco,
     total:totalVentas, esperadoEfectivo, contadoEfectivo:contado, baseFinal:contado, diferencia, obsCierre:obs, cerradoPor:STATE.user.nombre};
   const cs=DB.get('cierres')||[]; cs.unshift(cierre); DB.set('cierres',cs); DB.set('caja_actual',null);
   // La base del día siguiente DEBE ser lo que quedó contado al cerrar
@@ -2417,22 +2384,22 @@ function buildModals(){
       <div class="form-group"><label>Propina (del mesero)</label><input type="number" inputmode="numeric" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
       <div class="form-group"><label>Recargo datáfono</label><input type="number" inputmode="numeric" id="cobro-recargo" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
     </div>
-    <div class="flex-between mb-2" style="font-size:16px;font-weight:700;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>Total a cobrar</span><span class="text-gold" id="cobro-total-final">—</span></div>
+    <p class="text-xs text-gray mb-2" style="margin-top:-4px;">La propina y el recargo NO son del negocio: no entran a caja ni a ventas.</p>
     <div id="cobro-domicilio-box" style="display:none;background:rgba(52,152,219,0.08);border-radius:8px;padding:10px;margin-bottom:10px;">
-      <label class="text-sm" style="display:block;margin-bottom:6px;">🛵 ¿Cómo se paga el domicilio (<span id="cobro-dom-valor">0</span>)?</label>
+      <label class="text-sm" style="display:block;margin-bottom:6px;">🛵 Domicilio: <span id="cobro-dom-valor" class="text-gold">0</span> — ¿cómo lo paga el cliente?</label>
       <select id="cobro-dom-forma" class="mini-input" style="width:100%;" onchange="actualizarTotalCobro()">
-        <option value="efectivo_directo">Efectivo — el cliente le paga directo al domiciliario (NO entra a caja)</option>
-        <option value="restaurante">Banco/Llave/Tarjeta — entra al restaurante (luego le pago al domiciliario)</option>
+        <option value="efectivo_directo">EFECTIVO — el cliente le paga directo al domiciliario (NO entra a caja)</option>
+        <option value="banco">BANCO — entra a mi banco (yo le pago al domiciliario en efectivo del cajón)</option>
       </select>
-      <p class="text-xs text-gray mt-1">Si el cliente le paga el domicilio en efectivo al domiciliario, ese dinero no pasa por la caja. Solo cobre la comida abajo.</p>
+      <p class="text-xs text-gray mt-1" id="cobro-dom-ayuda"></p>
     </div>
-    <label class="text-sm" style="display:block;margin-bottom:6px;">¿Cómo paga el cliente? <span class="text-xs text-gray" id="cobro-que-cobrar"></span></label>
+    <div class="flex-between mb-2" style="font-size:16px;font-weight:700;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>Total a cobrar <span class="text-xs text-gray" id="cobro-que-cobrar"></span></span><span class="text-gold" id="cobro-total-final">—</span></div>
+    <label class="text-sm" style="display:block;margin-bottom:6px;">¿Cómo paga el cliente?</label>
     <p class="text-xs text-gray mb-2">Escriba cuánto paga en cada forma. Puede combinar varias. Deje en 0 las que no use.</p>
     <div class="form-grid-2">
       <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="pago-efectivo" placeholder="0" oninput="actualizarRepartoCobro()"></div>
       <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="pago-tarjeta" placeholder="0" oninput="actualizarRepartoCobro()"></div>
-      <div class="form-group"><label>Banco <span class="text-xs text-gray">(verificar)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarRepartoCobro()"></div>
-      <div class="form-group"><label>Llave <span class="text-xs text-gray">(verificar)</span></label><input type="number" inputmode="numeric" id="pago-llave" placeholder="0" oninput="actualizarRepartoCobro()"></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Banco <span class="text-xs text-gray">(transferencia)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarRepartoCobro()"></div>
     </div>
     <div style="text-align:center;font-size:13px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.2);" id="cobro-reparto-msg">—</div>
     </div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" id="btn-confirmar-cobro" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar</button></div></div></div>
