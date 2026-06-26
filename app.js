@@ -87,10 +87,14 @@ function montoPorMetodoDe(v, metodo){
   if(v.pagos && typeof v.pagos==='object') return v.pagos[metodo]||0;
   return v.metodo===metodo ? (v.total||0) : 0;
 }
-// Domicilio que entró por banco y se le pagó al domiciliario en efectivo del cajón.
-// Ese efectivo SALE de la caja, así que se descuenta del efectivo esperado.
+// Extras (propina + recargo + domicilio) que entraron por BANCO/TARJETA y se le pagan
+// a su dueño (mesero/domiciliario) en EFECTIVO del cajón. Ese efectivo SALE de la caja.
+// Esto evita que sobre plata en el sistema. Se calcula una sola vez al cobrar (extraSaleEfectivo).
 function domicilioSalidaEfectivo(v){
   if(v.estado!=='pagada') return 0;
+  // Modelo nuevo: ya viene calculado el extra electrónico que se paga en efectivo.
+  if(v.extraSaleEfectivo!==undefined) return v.extraSaleEfectivo||0;
+  // Respaldo modelo viejo: solo domicilio por banco.
   if(v.valorDom>0 && v.domPorBanco) return v.valorDom;
   return 0;
 }
@@ -1151,11 +1155,21 @@ function confirmarCobroMesa(){
   // Lo que queda en 'restante' es propina + recargo + domicilio-banco (no es venta del negocio)
   const pagosExtra={ efectivo:restante.efectivo, tarjeta:restante.tarjeta, banco:restante.banco };
 
+  // ===== EXTRAS QUE SALEN DEL CAJÓN =====
+  // Propina, recargo y domicilio NO son del negocio. Cuando el cliente los paga por
+  // BANCO/TARJETA (electrónico), ese dinero entra al banco, pero al dueño (mesero/domiciliario)
+  // se le paga en EFECTIVO del cajón. Entonces ESE efectivo sale del cajón.
+  // extraElectronico = parte de los extras que entró por banco/tarjeta.
+  const extraElectronico = (pagosExtra.banco||0) + (pagosExtra.tarjeta||0);
+  // Todo el extra electrónico se paga al mesero/domiciliario en efectivo → sale del cajón.
+  const extraSaleEfectivo = extraElectronico;
+
   // Guardar todo separado y claro
   v.comida=comida;
   v.ventaReal=comida;        // compatibilidad con reportes existentes
   v.propina=propina;         // va al mesero
   v.recargo=recargo;         // recargo datáfono (no es del negocio)
+  v.extraSaleEfectivo=extraSaleEfectivo;  // propina/recargo/domicilio por banco que se pagan en efectivo
   v.valorDom=dom;
   v.domFormaPago = dom>0 ? domForma : null;
   v.domPorBanco = domPorBanco;   // si entró por banco → se paga al domiciliario en efectivo
@@ -1351,7 +1365,7 @@ function caja(){
       <div class="flex-between" style="padding:7px 0;"><span>Retiros Autorizados</span><strong class="text-red">-${fmtMoney(retiros)}</strong></div>
       <hr class="divider">
       <div class="flex-between" style="font-size:18px;font-weight:700;"><span>Efectivo en Caja</span><span class="text-gold">${fmtMoney(enCaja)}</span></div>
-      <p class="text-xs text-gray mt-1">Efectivo del cajón: base + comida en efectivo + entradas − gastos − retiros${domiBanco>0?' − domicilios por banco ('+fmtMoney(domiBanco)+', pagados al domiciliario en efectivo)':''}. Propina, recargo y domicilio en efectivo no entran a caja. El banco/tarjeta tampoco está en el cajón.</p>
+      <p class="text-xs text-gray mt-1">Efectivo del cajón: base + comida en efectivo + entradas − gastos − retiros${domiBanco>0?' − propinas/recargos/domicilios por banco ('+fmtMoney(domiBanco)+', pagados en efectivo a su dueño)':''}. Solo la comida es del negocio. El banco/tarjeta no está en el cajón.</p>
       ${STATE.user.rol==='admin'?`<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--gold);">🔍 Ver desglose del efectivo (diagnóstico)</summary>
         <div style="margin-top:8px;font-size:11px;">
           <div class="flex-between" style="padding:3px 0;"><span>Base inicial</span><span>${fmtMoney(c.fondo)}</span></div>
