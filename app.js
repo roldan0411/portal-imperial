@@ -641,7 +641,9 @@ function guardarMesa(){
         if(dif>0) nuevosItems.push({nombre:i.nombre, qty:dif, precio:i.precio, obs:i.obs});
       });
       const huboAgregados = nuevosItems.length>0;
-      const estabaEntregada = (v.estadoPedido==='entregado' || v.estadoCocina==='entregado' || v.estadoCocina==='listo');
+      // "Ya fue servida" si alguna vez estuvo lista/entregada. Esta marca NO se borra,
+      // así el aviso "AGREGARON PEDIDO" sale CADA vez que se agregue algo, no solo la primera.
+      const estabaServida = (v.estadoPedido==='entregado' || v.estadoCocina==='entregado' || v.estadoCocina==='listo' || v.yaFueServida);
 
       v.items=[...STATE.order]; v.subtotal=subtotal; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
       v.total=total; v.comida=total; v.obs=STATE.orderObs; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
@@ -649,17 +651,18 @@ function guardarMesa(){
       v.estadoPedido='en_proceso';
       v.ticketImpreso=false;
       v.reimpreso=(v.reimpreso||0)+1;
-      // Si la mesa YA estaba entregada/lista y agregaron productos, marcar como AGREGADO
-      if(huboAgregados && estabaEntregada){
+      // Si la mesa YA fue servida alguna vez y agregaron productos, marcar como AGREGADO
+      if(huboAgregados && estabaServida){
         v.pedidoAgregado=true;
-        v.itemsAgregados=nuevosItems; // solo lo nuevo, para imprimir aparte
+        v.yaFueServida=true; // recordar para los próximos agregados
+        v.itemsAgregados=nuevosItems; // lo nuevo, para el recuadro destacado
         v.horaAgregado=now();
       } else {
         v.pedidoAgregado=false; v.itemsAgregados=null;
       }
       fusionarYGuardarVentas(vs);
       notifyKitchen();
-      toast(huboAgregados && estabaEntregada ? '🍽️ Productos agregados y enviados a cocina' : 'Mesa actualizada y enviada a cocina','success');
+      toast(huboAgregados && estabaServida ? '🍽️ Productos agregados y enviados a cocina' : 'Mesa actualizada y enviada a cocina','success');
       printTicketCocina(v);
     }
     clearOrder(); showPage('pedidos'); return;
@@ -1001,7 +1004,9 @@ function pedidos(){
   const cajaId=cajaActual?cajaActual.id:null;
   const vs=(DB.get('ventas')||[]).filter(v=>{
     if(v.estado==='anulada') return false;
-    if(v.estado==='abierta' || v.estado==='por_verificar') return true; // nunca ocultar sin cobrar
+    // Los abiertos/por verificar se ven solo si son de la caja actual (evita pedidos pegados
+    // de cajas ya cerradas). Si no hay caja abierta, no se muestran pedidos viejos.
+    if(v.estado==='abierta' || v.estado==='por_verificar') return cajaId && v.cajaId===cajaId;
     return cajaId && v.cajaId===cajaId; // solo los de la caja abierta ahora
   });
   return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-orders')} Pedidos <span class="text-sm text-gray" style="font-weight:normal;">(caja actual)</span></div>
@@ -1055,7 +1060,7 @@ function domiciliarioSelect(v){
   return `<select onchange="asignarDomiciliario('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="">Asignar...</option>${ds.map(d=>`<option ${v.domiciliario===d.nombre?'selected':''}>${escapeHtml(d.nombre)}</option>`).join('')}</select>`;
 }
 function asignarDomiciliario(id,nombre){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.domiciliario=nombre;fusionarYGuardarVentas(vs);logAudit('Asignó domiciliario',`${v.factura} → ${nombre}`);toast('Domiciliario asignado','success');} }
-function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado')v.estadoCocina='entregado';fusionarYGuardarVentas(vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
+function setEstadoPedido(id,e){ const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(v){v.estadoPedido=e;if(e==='entregado'){v.estadoCocina='entregado';v.yaFueServida=true;}fusionarYGuardarVentas(vs); logAudit('Cambió estado pedido',`${refPedido(v)} → ${e} (por ${STATE.user.nombre})`);} updateBadges(); }
 // El SUPERVISOR (o admin) puede quitar un producto de cualquier pedido, incluso pagado.
 // Recalcula el total y ajusta los métodos de pago proporcionalmente. Sin valores fantasma.
 function abrirQuitarProducto(id){
@@ -1437,7 +1442,7 @@ function setEstadoCocina(id,e){
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado';
     if(e==='preparando' && !v.horaPreparando) v.horaPreparando=now();
     if(e==='listo' && !v.horaListo) v.horaListo=now();  // momento en que quedó listo (para medir tiempos)
-    if(e==='entregado' || e==='listo'){ v.pedidoAgregado=false; v.itemsAgregados=null; } // limpiar aviso de agregado
+    if(e==='entregado' || e==='listo'){ v.pedidoAgregado=false; v.itemsAgregados=null; v.yaFueServida=true; } // limpiar aviso; recordar que ya se sirvió
     fusionarYGuardarVentas(vs);
     if(e==='listo'){ sonidoListo(); toast(`${refCocina(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
   showPage(STATE.page); updateBadges();
@@ -1692,6 +1697,12 @@ function toggleEmpleadoField(){
 }
 function cerrarCaja(){
   const c=DB.get('caja_actual'); if(!c) return;
+  // Avisar si quedan pedidos sin cobrar en esta caja (para no dejarlos "colgados")
+  const sinCobrar=(DB.get('ventas')||[]).filter(v=>v.cajaId===c.id && (v.estado==='abierta'||v.estado==='por_verificar'));
+  if(sinCobrar.length>0){
+    const refs=sinCobrar.map(v=>refPedido(v)).join(', ');
+    if(!confirm(`⚠ Hay ${sinCobrar.length} pedido(s) SIN COBRAR en esta caja:\n${refs}\n\nSi cierras la caja, esos pedidos se quedarán sin cobrar y saldrán de la vista de pedidos.\n\n¿Cerrar de todos modos? (Cancela si quieres cobrarlos primero)`)) return;
+  }
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
   const efectivoVentas=vs.reduce((a,v)=>a+efectivoEnCajaDe(v),0);
   const entradas=(c.movimientos||[]).filter(m=>m.tipo==='entrada').reduce((a,m)=>a+m.monto,0);
@@ -2225,10 +2236,13 @@ function impresiones(){
     autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes, 4000);
   }
   const vs=DB.get('ventas')||[];
-  // Pedidos recientes (últimas 3 horas), no anulados
-  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/3600000 < 3;
-  const lista=vs.filter(v=>v.estado!=='anulada' && reciente(v))
-    .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  const cajaActual=DB.get('caja_actual');
+  // Pedidos recientes: de la caja abierta actual y de la última media hora.
+  // Si NO hay caja abierta, no se muestra nada (evita pedidos "pegados" tras cerrar caja).
+  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/3600000 < 3; };
+  const lista = cajaActual
+    ? vs.filter(v=>v.estado!=='anulada' && v.cajaId===cajaActual.id && reciente(v)).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))
+    : [];
   const autoOn = imprAutoActiva();
   return `
   <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
@@ -2290,9 +2304,11 @@ const colaImprIds=new Set(); // para no encolar dos veces lo mismo
 function procesarImpresionesPendientes(){
   if(!imprAutoActiva()) return;
   const vs=DB.get('ventas')||[];
-  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000 < 30; // últimos 30 min
+  const cajaActual=DB.get('caja_actual');
+  if(!cajaActual) return; // sin caja abierta no se procesa nada (evita bucles)
+  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/60000 < 30; };
   // Recorrer del más viejo al más nuevo para mantener el ORDEN de llegada
-  const ordenados=[...vs].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  const ordenados=[...vs].filter(v=>v.cajaId===cajaActual.id).sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   ordenados.forEach(v=>{
     if(v.estado==='anulada' || !reciente(v)) return;
     // Comanda de cocina pendiente
@@ -2782,9 +2798,11 @@ function revisarColaImpresion(){
   if(!cfg.qzActivo || !esEstacionImpresion()) return; // solo el computador de impresión
   if(imprimiendoCola) return;
   const vs=DB.get('ventas')||[];
-  // SOLO pedidos recientes (últimos 30 min). Evita imprimir todo el histórico en bucle.
-  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000 < 30;
-  const tickets=vs.filter(v=>v.estado!=='anulada' && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
+  const cajaActual=DB.get('caja_actual');
+  if(!cajaActual) return; // sin caja abierta no imprime nada pendiente
+  // SOLO pedidos de la caja abierta y recientes (últimos 30 min). Evita bucles.
+  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/60000 < 30; };
+  const tickets=vs.filter(v=>v.estado!=='anulada' && v.cajaId===cajaActual.id && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
   const facturas=vs.filter(v=>v.estado==='pagada' && !v.facturaImpresa && reciente(v)).map(v=>({v,tipo:'factura'}));
   const pendientes=[...tickets,...facturas];
   if(pendientes.length===0) return;
