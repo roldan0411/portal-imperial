@@ -912,7 +912,7 @@ function ticketCocinaHTML(v){
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
     ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;background:#000;color:#fff;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;">a una mesa que ya estaba servida</span></div>`:''}
-    ${v.copiaImpr&&!v.pedidoAgregado?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.copiaImpr}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
+    ${v.copiaImpr?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.copiaImpr}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
     ${esDom?`<div style="font-size:16px;line-height:1.5;margin-bottom:6px;font-weight:bold;">
@@ -924,8 +924,14 @@ function ticketCocinaHTML(v){
   </div>
   <hr style="border:1px dashed #000;margin:8px 0;">
   <div style="font-family:'Courier New',monospace;color:#000;">
-    ${v.pedidoAgregado&&v.itemsAgregados?`<div style="text-align:center;font-size:14px;font-weight:bold;margin-bottom:6px;">⬇ SOLO LO NUEVO QUE AGREGARON ⬇</div>${v.itemsAgregados.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}`
-    : v.items.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+    <div style="text-align:center;font-size:13px;font-weight:bold;margin-bottom:6px;">— PEDIDO COMPLETO —</div>
+    ${v.items.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+    ${v.pedidoAgregado&&v.itemsAgregados&&v.itemsAgregados.length?`
+      <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:10px 0;background:#000;color:#fff;">
+        <div style="text-align:center;font-size:15px;font-weight:bold;margin-bottom:6px;">➕ NUEVO — AGREGADO AHORA ➕</div>
+        ${v.itemsAgregados.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:6px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+      </div>
+      <div style="text-align:center;font-size:12px;">(lo de arriba es el pedido completo; el recuadro es lo que se acaba de agregar)</div>`:''}
     ${v.obs?`<hr style="border:1px dashed #000;margin:8px 0;"><div style="font-size:16px;font-weight:bold;">NOTA: ${escapeHtml(v.obs)}</div>`:''}
   </div>
   <div style="text-align:center;font-size:18px;margin-top:10px;">--- &#9986; ---</div>`;
@@ -1035,7 +1041,8 @@ function renderPedidosTable(vs){
       ${porVerificar?`<button class="btn btn-primary btn-sm" onclick="verificarPago('${v.id}')" title="Verificar comprobante">${ic('i-check')} Verificar</button>`:''}
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
       ${['admin','supervisor'].includes(STATE.user.rol) && v.items.length>1?`<button class="btn btn-ghost btn-sm" onclick="abrirQuitarProducto('${v.id}')" title="Quitar un producto">${ic('i-menu-food')}−</button>`:''}
-      <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
+      <button class="btn btn-ghost btn-sm" onclick="reimprimirComanda('${v.id}')" title="Reimprimir comanda (cocina)">${ic('i-chef')}</button>
+      <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir factura">${ic('i-print')}</button>
       ${(v.estado==='pagada'||v.estado==='por_verificar') && ['admin','supervisor','cajero'].includes(STATE.user.rol)?`<button class="btn btn-ghost btn-sm" onclick="abrirEditarPago('${v.id}')" title="Editar forma de pago">${ic('i-cash')}✎</button>`:''}
       ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : (isAdmin||STATE.user.rol==='jefe'))?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
       ${['admin','supervisor'].includes(STATE.user.rol)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar factura por completo">${ic('i-trash')}</button>`:''}
@@ -1391,6 +1398,10 @@ function renderKDS(vs){
       <div class="text-sm" style="margin-bottom:8px;color:var(--light);">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
       ${v.tipo==='domicilio'?`<div class="text-xs text-gray" style="margin-bottom:8px;">${ic('i-pin')} ${escapeHtml(v.cliDir||'')}<br>${ic('i-phone')} ${escapeHtml(v.cliTel||'')}</div>`:''}
       ${v.items.map(i=>`<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);"><span style="font-size:16px;font-weight:700;">${i.qty}x</span> <span style="font-size:14px;">${escapeHtml(i.nombre)}</span>${i.obs?`<div class="text-xs text-red" style="margin-top:2px;">${ic('i-warning')} ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+      ${v.pedidoAgregado&&v.itemsAgregados&&v.itemsAgregados.length?`<div style="margin-top:8px;border:2px solid var(--gold);border-radius:8px;padding:8px;background:rgba(212,175,55,0.12);">
+        <div style="font-size:11px;font-weight:bold;color:var(--gold);text-align:center;margin-bottom:5px;">➕ NUEVO — AGREGADO AHORA</div>
+        ${v.itemsAgregados.map(i=>`<div style="padding:3px 0;"><span style="font-size:16px;font-weight:700;color:var(--gold);">${i.qty}x</span> <span style="font-size:14px;color:var(--gold);">${escapeHtml(i.nombre)}</span>${i.obs?`<div class="text-xs" style="color:var(--orange);margin-top:2px;">${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+      </div>`:''}
       ${v.obs?`<div style="margin-top:8px;padding:6px 10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:12px;color:var(--orange);">${escapeHtml(v.obs)}</div>`:''}
       <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
         ${v.estadoCocina!=='preparando'&&v.estadoCocina!=='listo'?`<button class="btn btn-primary btn-sm" onclick="setEstadoCocina('${v.id}','preparando')">${ic('i-chef')} Preparando</button>`:''}
