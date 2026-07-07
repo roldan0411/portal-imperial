@@ -491,8 +491,7 @@ function ventas(){
       <div class="order-items" id="order-items"></div>
       <div class="order-summary" id="order-summary"></div>
     </div>
-  </div>
-  <datalist id="clientes-list">${clientes.map(c=>`<option value="${escapeHtml(c.nombre)}" data-id="${c.id}">`).join('')}</datalist>`;
+  </div>`;
 }
 function menuCard(p){
   if(p.agotado){
@@ -524,26 +523,72 @@ function renderCamposTipo(){
   if(STATE.tipoPedido==='mesa'){
     html=`<select class="mini-input" style="margin-bottom:8px;" onchange="STATE.mesa=this.value"><option value="">Seleccionar mesa...</option>${Array.from({length:nMesas},(_,i)=>`<option value="Mesa ${i+1}" ${STATE.mesa==='Mesa '+(i+1)?'selected':''}>Mesa ${i+1}</option>`).join('')}</select>`;
   } else if(STATE.tipoPedido==='llevar'){
-    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;autoFillPorTel(this.value)">
-    <input type="text" class="mini-input" list="clientes-list" style="margin-bottom:8px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;autoFillCliente(this.value)">`;
+    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;sugerirClientes(this.value)">
+    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;sugerirClientes(this.value)">
+    <div id="cliente-sugerencias" style="display:none;background:var(--dark3);border:1px solid rgba(212,175,55,0.25);border-radius:8px;margin-bottom:8px;max-height:200px;overflow-y:auto;"></div>`;
   } else if(STATE.tipoPedido==='domicilio'){
-    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono * (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;autoFillPorTel(this.value)">
-    <input type="text" class="mini-input" list="clientes-list" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;autoFillCliente(this.value)">
+    html=`<input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Teléfono * (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;sugerirClientes(this.value)">
+    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;sugerirClientes(this.value)">
+    <div id="cliente-sugerencias" style="display:none;background:var(--dark3);border:1px solid rgba(212,175,55,0.25);border-radius:8px;margin-bottom:8px;max-height:200px;overflow-y:auto;"></div>
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Dirección *" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value">
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
     <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`;
   }
   c.innerHTML=html;
 }
-function autoFillPorTel(tel){
-  if(!tel||tel.length<6) return;
-  const cl=(DB.get('clientes')||[]).find(c=>c.tel===tel);
-  if(cl){ STATE.cliNombre=cl.nombre||''; STATE.cliDir=cl.dir||''; STATE.cliBarrio=cl.barrio||'';
-    renderCamposTipo(); toast('Cliente encontrado: '+cl.nombre,'success'); }
+// Muestra SUGERENCIAS de clientes (no rellena solo). El usuario hace clic para elegir.
+function sugerirClientes(texto, campo){
+  const cont=document.getElementById('cliente-sugerencias');
+  if(!cont) return;
+  const q=(texto||'').trim().toLowerCase();
+  if(q.length<2){ cont.innerHTML=''; cont.style.display='none'; return; }
+  const clientes=DB.get('clientes')||[];
+  // Buscar por nombre O teléfono
+  const matches=clientes.filter(c=>
+    (c.nombre||'').toLowerCase().includes(q) || (c.tel||'').includes(q)
+  ).slice(0,6);
+  if(matches.length===0){ cont.innerHTML=''; cont.style.display='none'; return; }
+  cont.innerHTML=matches.map(c=>`<div onclick="seleccionarCliente('${c.id}')" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);transition:background .15s;" onmouseover="this.style.background='rgba(212,175,55,0.12)'" onmouseout="this.style.background='transparent'">
+    <strong>${escapeHtml(c.nombre||'Sin nombre')}</strong> <span class="text-xs text-gray">${c.tel?'· '+escapeHtml(c.tel):''}</span>
+    ${c.dir?`<br><span class="text-xs text-gray">${escapeHtml(c.dir)}${c.barrio?' · '+escapeHtml(c.barrio):''}</span>`:''}
+  </div>`).join('');
+  cont.style.display='block';
 }
-function autoFillCliente(nombre){
-  const cl=(DB.get('clientes')||[]).find(c=>c.nombre.toLowerCase()===nombre.toLowerCase());
-  if(cl){ STATE.cliTel=cl.tel||''; STATE.cliDir=cl.dir||''; STATE.cliBarrio=cl.barrio||''; renderCamposTipo(); }
+// Solo al hacer CLIC en una sugerencia se rellenan TODOS los datos de ese cliente.
+function seleccionarCliente(id){
+  const cl=(DB.get('clientes')||[]).find(c=>c.id===id);
+  if(!cl) return;
+  STATE.cliNombre=cl.nombre||''; STATE.cliTel=cl.tel||''; STATE.cliDir=cl.dir||''; STATE.cliBarrio=cl.barrio||'';
+  const cont=document.getElementById('cliente-sugerencias'); if(cont){ cont.innerHTML=''; cont.style.display='none'; }
+  renderCamposTipo();
+  toast('Cliente seleccionado: '+cl.nombre,'success');
+}
+// Mantener funciones viejas por compatibilidad, pero que solo SUGIERAN (no rellenen)
+function autoFillPorTel(tel){ sugerirClientes(tel); }
+function autoFillCliente(nombre){ sugerirClientes(nombre); }
+// Guarda o actualiza el cliente. Aplica para domicilio Y para llevar (si hay nombre o teléfono).
+// Busca por teléfono si existe; si no, por nombre exacto. Así no se pierde ningún cliente.
+function guardarClienteSiAplica(){
+  const nombre=(STATE.cliNombre||'').trim();
+  const tel=(STATE.cliTel||'').trim();
+  if(!nombre && !tel) return; // sin datos, no guarda (ej: mesa)
+  const cls=DB.get('clientes')||[];
+  // Buscar cliente existente: primero por teléfono (si hay), luego por nombre exacto
+  let ex=null;
+  if(tel) ex=cls.find(c=>c.tel && c.tel===tel);
+  if(!ex && nombre) ex=cls.find(c=>(c.nombre||'').toLowerCase()===nombre.toLowerCase() && (!c.tel || !tel));
+  if(ex){
+    // Actualizar datos (solo si vienen con valor, para no borrar lo que ya había)
+    ex.pedidos=(ex.pedidos||0)+1;
+    if(nombre) ex.nombre=nombre;
+    if(tel) ex.tel=tel;
+    if(STATE.cliDir) ex.dir=STATE.cliDir;
+    if(STATE.cliBarrio) ex.barrio=STATE.cliBarrio;
+    ex.ultimoPedido=now();
+  } else {
+    cls.unshift({id:uid(),nombre,tel,dir:STATE.cliDir||'',barrio:STATE.cliBarrio||'',pedidos:1,creado:now(),ultimoPedido:now()});
+  }
+  DB.set('clientes',cls);
 }
 
 function addToOrder(id){
@@ -699,11 +744,7 @@ function guardarPedidoAbierto(){
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
     obs:STATE.orderObs, cajero:'', mesero:STATE.user.nombre, creadoPor:STATE.user.nombre, atendidoPor:STATE.user.nombre, atendidoRol:STATE.user.rol, cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); fusionarYGuardarVentas(vs);
-  if(esDomicilio){
-    const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
-    if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
-    DB.set('clientes',cls);
-  }
+  guardarClienteSiAplica();
   logAudit('Mesero creó pedido',`${esDomicilio?STATE.cliNombre:'Orden '+venta.ordenCocina} por ${STATE.user.nombre}`);
   notifyKitchen(); clearOrder();
   toast('Pedido enviado a cocina. El cajero lo cobrará.','success');
@@ -741,12 +782,7 @@ function cobrarVenta(){
     metodo:'', estado:'abierta', estadoPedido:'activo', estadoCocina:'pendiente', domiciliario:'',
     obs:STATE.orderObs, cajero:STATE.user?.nombre, atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol, mesero:STATE.user?.rol==='mesero'?STATE.user.nombre:'', cajaId:DB.get('caja_actual')?.id||null };
   vs.unshift(venta); fusionarYGuardarVentas(vs);
-
-  if(esDomicilio){
-    const cls=DB.get('clientes')||[]; const ex=cls.find(c=>c.tel===STATE.cliTel);
-    if(ex){ ex.pedidos=(ex.pedidos||0)+1; ex.nombre=STATE.cliNombre; ex.dir=STATE.cliDir; ex.barrio=STATE.cliBarrio; } else cls.unshift({id:uid(),nombre:STATE.cliNombre,tel:STATE.cliTel,dir:STATE.cliDir,barrio:STATE.cliBarrio,pedidos:1,creado:now()});
-    DB.set('clientes',cls);
-  }
+  guardarClienteSiAplica();
   logAudit('Creó venta',`${STATE.cliNombre||venta.ordenCocina} - venta ${fmtMoney(ventaReal)}`);
   notifyKitchen();
   printTicketCocina(venta);
@@ -897,7 +933,7 @@ function facturaHTML(v){
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
     ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:17px;color:#000;margin-top:12px;letter-spacing:1px;border-top:2px dotted #666;padding-top:10px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
     <div style="text-align:center;font-size:13px;color:#333;margin-top:8px;font-weight:bold;letter-spacing:0.5px;border-top:1px dashed #999;padding-top:8px;">
-      📧 Contacto: wallacecompany11@gmail.com
+      wallacecompany11@gmail.com
     </div>
   </div>`;
 }
@@ -915,7 +951,7 @@ function ticketCocinaHTML(v){
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
     ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;background:#000;color:#fff;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;">a una mesa que ya estaba servida</span></div>`:''}
-    ${v.copiaImpr?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.copiaImpr}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
+    ${v.copiaImpr?`<div style="display:inline-block;border:2px solid #000;padding:2px 10px;margin:4px 0;font-size:14px;font-weight:bold;border-radius:4px;">COPIA ${v.copiaImpr}</div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
     ${esDom?`<div style="font-size:16px;line-height:1.5;margin-bottom:6px;font-weight:bold;">
