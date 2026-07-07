@@ -161,6 +161,14 @@ function initData(){
   if(!DB.get('ventas')) DB.set('ventas',[]);
   if(!DB.get('clientes')) DB.set('clientes',[]);
   if(!DB.get('cierres')) DB.set('cierres',[]);
+  // Limpieza mensual: conservar cierres del mes actual y el anterior; borrar más viejos.
+  (function(){
+    const cs=DB.get('cierres')||[]; if(cs.length===0) return;
+    const ahora=new Date(ahoraMs());
+    const limite=new Date(ahora.getFullYear(), ahora.getMonth()-1, 1).getTime(); // inicio del mes anterior
+    const conservar=cs.filter(c=>{ const f=new Date(c.cierre||c.apertura||0).getTime(); return f>=limite; });
+    if(conservar.length!==cs.length) DB.set('cierres',conservar);
+  })();
   if(!DB.get('auditoria')) DB.set('auditoria',[]);
   if(!DB.get('domiciliarios')) DB.set('domiciliarios',[
     {id:'d1',nombre:'Juan Pérez',activo:true},
@@ -820,7 +828,7 @@ function facturaHTML(v){
   return `
   <div style="font-family:'Courier New',monospace;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
-      ${cfg.logo?`<img src="${cfg.logo}" style="max-height:90px;max-width:200px;margin-bottom:6px;">`:''}
+      ${cfg.logo?`<img src="${cfg.logo}" style="max-height:150px;max-width:280px;margin-bottom:8px;">`:''}
       <div style="font-size:24px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
       <div style="font-size:13px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
       <div style="font-size:12px;margin-top:6px;line-height:1.5;">
@@ -862,7 +870,10 @@ function facturaHTML(v){
     <div style="text-align:center;margin-top:12px;font-size:15px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
     <div style="text-align:center;font-size:14px;color:#333;margin-top:4px;font-weight:bold;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
-    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:12px;color:#444;margin-top:10px;letter-spacing:1px;border-top:1px dotted #999;padding-top:8px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
+    ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:17px;color:#000;margin-top:12px;letter-spacing:1px;border-top:2px dotted #666;padding-top:10px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
+    <div style="text-align:center;font-size:13px;color:#333;margin-top:8px;font-weight:bold;letter-spacing:0.5px;border-top:1px dashed #999;padding-top:8px;">
+      📧 Contacto: wallacecompany11@gmail.com
+    </div>
   </div>`;
 }
 function ticketCocinaHTML(v){
@@ -879,7 +890,7 @@ function ticketCocinaHTML(v){
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
     ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;background:#000;color:#fff;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;">a una mesa que ya estaba servida</span></div>`:''}
-    ${v.reimpreso&&!v.pedidoAgregado?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.reimpreso}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
+    ${v.copiaImpr&&!v.pedidoAgregado?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.copiaImpr}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
     ${esDom?`<div style="font-size:16px;line-height:1.5;margin-bottom:6px;font-weight:bold;">
@@ -1367,11 +1378,26 @@ function renderKDS(vs){
 }
 function llamarMesero(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  // Marca un aviso que verán cajero/meseros, y suena alarma
   const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
-  if(t){ t.llamadoMesero=true; t.llamadoEn=now(); fusionarYGuardarVentas(vs); }
-  try{ sonidoListo(); }catch(e){}
-  toast(`Avisando: ${refCocina(v)} está listo para entregar`,'success');
+  if(t){
+    t.llamadoMesero=true;
+    t.llamadoEn=now();
+    t.llamadoTick=ahoraMs(); // marca única de esta pulsación (cambia cada vez)
+    t.llamadoCount=(t.llamadoCount||0)+1;
+    fusionarYGuardarVentas(vs);
+  }
+  // Suena FUERTE en la pantalla de cocina también (confirma al cocinero)
+  try{ sonidoLlamarMeseroFuerte(); }catch(e){}
+  toast(`🔔 Llamando al mesero: ${refCocina(v)} listo`,'success');
+}
+// Sonido fuerte para llamar al mesero (más notorio que la campanita normal)
+function sonidoLlamarMeseroFuerte(){
+  try{
+    campana(1319,0,0.25,1.0);
+    campana(1760,0.15,0.3,1.0);
+    campana(1319,0.35,0.25,1.0);
+    campana(1760,0.5,0.35,1.0);
+  }catch(e){}
 }
 function setEstadoCocina(id,e){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id);
@@ -1403,7 +1429,9 @@ function caja(){
           <p class="text-xs text-gray mt-1">Reduce la base con la que abrirá mañana. Queda registrado.</p>
         </div>`:''}
       </div>
-      ${cierres.length>0&&puedeAbrir?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Cierre</th></tr></thead><tbody>${cierres.slice(0,15).map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${fmtDate(c.cierre)}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
+      ${cierres.length>0&&puedeAbrir?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres del Mes</div>
+      <p class="text-xs text-gray mb-2">Los cierres se guardan durante el mes actual y el anterior. Se limpian automáticamente para mantener el control ordenado.</p>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>Día</th><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Hora cierre</th></tr></thead><tbody>${cierres.map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; const dia=c.cierre?new Date(c.cierre).toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'numeric'}):'—'; return `<tr><td class="font-bold">${dia}</td><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${c.cierre?new Date(c.cierre).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}):'—'}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
@@ -2268,9 +2296,10 @@ function arrancarColaImpr(){
 }
 function reimprimirComanda(id){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
-  v.reimpreso=(v.reimpreso||0)+1; // cuenta la copia (1, 2, 3, 4...)
+  v.copiaImpr=(v.copiaImpr||0)+1; // cuenta SOLO las reimpresiones manuales (copia 1, 2, 3...)
   fusionarYGuardarVentas(vs);
-  imprimirNavegador(ticketCocinaHTML(v)); toast(`Reimprimiendo comanda (copia ${v.reimpreso})...`,'info');
+  const vv={...v}; // imprimir con el número de copia actual
+  imprimirNavegador(ticketCocinaHTML(vv)); toast(`Reimprimiendo comanda (copia ${v.copiaImpr})...`,'info');
 }
 function reimprimirFactura(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
@@ -2576,21 +2605,25 @@ function desbloquearPantalla(){
 }
 setInterval(updateClock,1000);
 // Detector de "llamado a mesero": si cocina llama a un mesero, suena en la pantalla del mesero.
-let _ultimoLlamados=-1;
+let _ultimoLlamados=0;
 function revisarLlamadoMesero(){
   if(!STATE.user) return;
   // Aplica a meseros (y también admin/supervisor/cajero que ven pedidos)
   const roles=['mesero','admin','supervisor','cajero'];
   if(!roles.includes(STATE.user.rol)) return;
   const vs=DB.get('ventas')||[];
-  const llamados=vs.filter(v=>v.llamadoMesero && v.estadoPedido!=='entregado' && v.estado!=='anulada').length;
-  if(_ultimoLlamados>=0 && llamados>_ultimoLlamados){
-    try{ sonidoListo(); }catch(e){}
-    try{ toast('🔔 Cocina llama: hay un pedido listo para recoger','info'); }catch(e){}
+  // Buscar la marca de llamada MÁS RECIENTE de todos los pedidos activos.
+  // Cada vez que el cocinero toca "Llamar mesero", el tick cambia → suena de nuevo.
+  let maxTick=0;
+  vs.forEach(v=>{ if(v.llamadoMesero && v.estadoPedido!=='entregado' && v.estado!=='anulada' && v.llamadoTick>maxTick) maxTick=v.llamadoTick; });
+  if(_ultimoLlamados>0 && maxTick>_ultimoLlamados){
+    // Sonar FUERTE y repetido en la pantalla del mesero
+    try{ sonidoLlamarMeseroFuerte(); }catch(e){}
+    try{ toast('🔔🔔 COCINA LLAMA: pedido listo para recoger','info'); }catch(e){}
   }
-  _ultimoLlamados=llamados;
+  if(maxTick>_ultimoLlamados) _ultimoLlamados=maxTick;
 }
-setInterval(revisarLlamadoMesero, 4000);
+setInterval(revisarLlamadoMesero, 3000);
 setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos'||STATE.page==='tiempos')){ showPage(STATE.page); } updateBadges(); },6000);
 let lastAct=Date.now();
 document.addEventListener('mousemove',()=>lastAct=Date.now());
