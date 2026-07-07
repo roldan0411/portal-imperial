@@ -598,18 +598,38 @@ function guardarMesa(){
   const vs=DB.get('ventas')||[];
 
   if(STATE.editandoVenta){
-    // Actualizar mesa existente: marcar platos nuevos como pendientes para cocina
+    // Actualizar mesa existente: marcar platos NUEVOS como pendientes para cocina
     const v=vs.find(x=>x.id===STATE.editandoVenta.id);
     if(v){
+      // Detectar productos NUEVOS (los que no estaban antes) comparando con los items previos
+      const itemsAntes=v.items||[];
+      const contarAntes={}; itemsAntes.forEach(i=>{ contarAntes[i.nombre]=(contarAntes[i.nombre]||0)+i.qty; });
+      const nuevosItems=[];
+      STATE.order.forEach(i=>{
+        const antes=contarAntes[i.nombre]||0;
+        const dif=i.qty-antes;
+        if(dif>0) nuevosItems.push({nombre:i.nombre, qty:dif, precio:i.precio, obs:i.obs});
+      });
+      const huboAgregados = nuevosItems.length>0;
+      const estabaEntregada = (v.estadoPedido==='entregado' || v.estadoCocina==='entregado' || v.estadoCocina==='listo');
+
       v.items=[...STATE.order]; v.subtotal=subtotal; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
-      v.total=total; v.obs=STATE.orderObs; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
+      v.total=total; v.comida=total; v.obs=STATE.orderObs; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
       v.estadoCocina='pendiente'; // vuelve a cocina por si agregó/quitó platos
-      v.ticketImpreso=false; // reimprimir comanda con los cambios
+      v.estadoPedido='en_proceso';
+      v.ticketImpreso=false;
       v.reimpreso=(v.reimpreso||0)+1;
+      // Si la mesa YA estaba entregada/lista y agregaron productos, marcar como AGREGADO
+      if(huboAgregados && estabaEntregada){
+        v.pedidoAgregado=true;
+        v.itemsAgregados=nuevosItems; // solo lo nuevo, para imprimir aparte
+        v.horaAgregado=now();
+      } else {
+        v.pedidoAgregado=false; v.itemsAgregados=null;
+      }
       fusionarYGuardarVentas(vs);
-      logAudit('Actualizó mesa',`${v.mesa} por ${STATE.user.nombre}`);
       notifyKitchen();
-      toast('Mesa actualizada y enviada a cocina','success');
+      toast(huboAgregados && estabaEntregada ? '🍽️ Productos agregados y enviados a cocina' : 'Mesa actualizada y enviada a cocina','success');
       printTicketCocina(v);
     }
     clearOrder(); showPage('pedidos'); return;
@@ -858,7 +878,8 @@ function ticketCocinaHTML(v){
   return `
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
-    ${v.reimpreso?`<div style="border:2px solid #000;padding:4px;margin:4px 0;font-size:16px;font-weight:bold;">⚠ PEDIDO MODIFICADO ⚠<br>(reimpresión ${v.reimpreso})</div>`:''}
+    ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;background:#000;color:#fff;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;">a una mesa que ya estaba servida</span></div>`:''}
+    ${v.reimpreso&&!v.pedidoAgregado?`<div style="border:2px solid #000;padding:6px;margin:4px 0;font-size:20px;font-weight:bold;">📋 COPIA ${v.reimpreso}<br><span style="font-size:14px;">(reimpresión)</span></div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
     ${esDom?`<div style="font-size:16px;line-height:1.5;margin-bottom:6px;font-weight:bold;">
@@ -870,7 +891,8 @@ function ticketCocinaHTML(v){
   </div>
   <hr style="border:1px dashed #000;margin:8px 0;">
   <div style="font-family:'Courier New',monospace;color:#000;">
-    ${v.items.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+    ${v.pedidoAgregado&&v.itemsAgregados?`<div style="text-align:center;font-size:14px;font-weight:bold;margin-bottom:6px;">⬇ SOLO LO NUEVO QUE AGREGARON ⬇</div>${v.itemsAgregados.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}`
+    : v.items.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
     ${v.obs?`<hr style="border:1px dashed #000;margin:8px 0;"><div style="font-size:16px;font-weight:bold;">NOTA: ${escapeHtml(v.obs)}</div>`:''}
   </div>
   <div style="text-align:center;font-size:18px;margin-top:10px;">--- &#9986; ---</div>`;
@@ -981,6 +1003,7 @@ function renderPedidosTable(vs){
       ${editable?`<button class="btn btn-ghost btn-sm" onclick="editarPedido('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
       ${['admin','supervisor'].includes(STATE.user.rol) && v.items.length>1?`<button class="btn btn-ghost btn-sm" onclick="abrirQuitarProducto('${v.id}')" title="Quitar un producto">${ic('i-menu-food')}−</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir">${ic('i-print')}</button>
+      ${(v.estado==='pagada'||v.estado==='por_verificar') && ['admin','supervisor','cajero'].includes(STATE.user.rol)?`<button class="btn btn-ghost btn-sm" onclick="abrirEditarPago('${v.id}')" title="Editar forma de pago">${ic('i-cash')}✎</button>`:''}
       ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : (isAdmin||STATE.user.rol==='jefe'))?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
       ${['admin','supervisor'].includes(STATE.user.rol)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar factura por completo">${ic('i-trash')}</button>`:''}
     </td></tr>`;}).join('')}
@@ -1199,6 +1222,68 @@ function confirmarCobroMesa(){
   printFactura(v);
   showPage('pedidos');
 }
+// ===== EDITAR FORMA DE PAGO (después de cobrado) =====
+let editandoPagoId=null;
+function abrirEditarPago(id){
+  if(!['admin','supervisor','cajero'].includes(STATE.user.rol)){ toast('No autorizado','error'); return; }
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
+  editandoPagoId=id;
+  const p=v.pagos||{efectivo:0,tarjeta:0,banco:0};
+  document.getElementById('editpago-info').innerHTML=`<strong>${escapeHtml(refPedido(v))}</strong> · Total cobrado: <span class="text-gold">${fmtMoney(v.totalCobrado||v.total)}</span>`;
+  document.getElementById('editpago-efectivo').value=p.efectivo||0;
+  document.getElementById('editpago-tarjeta').value=p.tarjeta||0;
+  document.getElementById('editpago-banco').value=p.banco||0;
+  actualizarEditPago();
+  openModal('modal-editpago');
+}
+function actualizarEditPago(){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===editandoPagoId); if(!v) return;
+  const ef=parseFloat(document.getElementById('editpago-efectivo')?.value)||0;
+  const ta=parseFloat(document.getElementById('editpago-tarjeta')?.value)||0;
+  const ba=parseFloat(document.getElementById('editpago-banco')?.value)||0;
+  const suma=ef+ta+ba;
+  const objetivo=v.totalCobrado||v.total||0;
+  const msg=document.getElementById('editpago-msg');
+  const dif=objetivo-suma;
+  if(Math.abs(dif)<1){ msg.innerHTML='<span class="text-green font-bold">✓ Cuadra con el total</span>'; }
+  else if(dif>0){ msg.innerHTML=`<span class="text-gold">Falta ${fmtMoney(dif)}</span>`; }
+  else { msg.innerHTML=`<span class="text-red">Sobra ${fmtMoney(Math.abs(dif))}</span>`; }
+}
+function guardarEditPago(){
+  const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===editandoPagoId); if(!v){ closeModal('modal-editpago'); return; }
+  const ef=parseFloat(document.getElementById('editpago-efectivo')?.value)||0;
+  const ta=parseFloat(document.getElementById('editpago-tarjeta')?.value)||0;
+  const ba=parseFloat(document.getElementById('editpago-banco')?.value)||0;
+  const suma=ef+ta+ba;
+  const objetivo=v.totalCobrado||v.total||0;
+  if(Math.abs(objetivo-suma)>=1){ toast('El pago debe sumar el total cobrado','error'); return; }
+  // Recalcular pagosVenta (solo comida) y pagosExtra (propina+recargo+domicilio)
+  const comida=v.total||0;
+  let restante={efectivo:ef,tarjeta:ta,banco:ba};
+  const pagosVenta={efectivo:0,tarjeta:0,banco:0};
+  let porCubrir=comida;
+  for(const k of ['efectivo','tarjeta','banco']){
+    if(porCubrir<=0) break;
+    const toma=Math.min(restante[k],porCubrir);
+    pagosVenta[k]+=toma; restante[k]-=toma; porCubrir-=toma;
+  }
+  const pagosExtra={efectivo:restante.efectivo,tarjeta:restante.tarjeta,banco:restante.banco};
+  const extraSaleEfectivo=(pagosExtra.banco||0)+(pagosExtra.tarjeta||0);
+  const pagoAntes=v.metodo;
+  v.pagos={efectivo:ef,tarjeta:ta,banco:ba};
+  v.pagosVenta=pagosVenta;
+  v.pagosExtra=pagosExtra;
+  v.extraSaleEfectivo=extraSaleEfectivo;
+  v.metodo=Object.entries(pagosVenta).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo';
+  // Si ahora hay banco, vuelve a por_verificar; si no, pagada
+  v.estado = ba>0 ? 'por_verificar' : 'pagada';
+  v.pagoEditadoPor=STATE.user.nombre; v.pagoEditadoEn=now();
+  fusionarYGuardarVentas(vs);
+  logAudit('Editó forma de pago',`${refPedido(v)}: ahora efectivo ${fmtMoney(ef)}, tarjeta ${fmtMoney(ta)}, banco ${fmtMoney(ba)} (por ${STATE.user.nombre})`);
+  closeModal('modal-editpago'); editandoPagoId=null;
+  toast('Forma de pago actualizada','success');
+  showPage('pedidos');
+}
 function verificarPago(id){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
   if(!confirm('¿Confirma que ya verificó el comprobante de pago (Banco) y el dinero está recibido?')) return;
@@ -1266,7 +1351,8 @@ function renderKDS(vs){
   return `<div class="kds-grid">${vs.map(v=>{
     const min=Math.floor((ahoraMs()-new Date(v.fecha))/60000);
     const t=min<15?'verde':min<25?'amarillo':'rojo';
-    return `<div class="kds-card t-${t}">
+    return `<div class="kds-card t-${t}${v.pedidoAgregado?' kds-agregado':''}">
+      ${v.pedidoAgregado?`<div style="background:var(--gold);color:#000;font-weight:bold;text-align:center;padding:4px;border-radius:6px;margin-bottom:8px;font-size:13px;">➕ AGREGARON A ESTA MESA</div>`:''}
       <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refCocina(v)}</span>
       <span class="kds-timer ${t==='rojo'?'text-red':t==='amarillo'?'text-gold':'text-green'}">${min} min</span></div>
       <div class="text-sm" style="margin-bottom:8px;color:var(--light);">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
@@ -1292,6 +1378,7 @@ function setEstadoCocina(id,e){
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado';
     if(e==='preparando' && !v.horaPreparando) v.horaPreparando=now();
     if(e==='listo' && !v.horaListo) v.horaListo=now();  // momento en que quedó listo (para medir tiempos)
+    if(e==='entregado' || e==='listo'){ v.pedidoAgregado=false; v.itemsAgregados=null; } // limpiar aviso de agregado
     fusionarYGuardarVentas(vs);
     if(e==='listo'){ sonidoListo(); toast(`${refCocina(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
   showPage(STATE.page); updateBadges();
@@ -1329,6 +1416,14 @@ function caja(){
   const totalV=ventasReales;
   // Conceptos que NO son ingreso del negocio (van a terceros)
   const totalPropinas=vs.reduce((a,v)=>a+(v.propina||0),0);
+  // Propinas que el cliente pagó por BANCO/tarjeta (entran al banco pero se pagan al mesero en efectivo).
+  // pagosExtra tiene propina+recargo+domicilio por método; estimamos la propina electrónica.
+  const propinasPorBanco=vs.reduce((a,v)=>{
+    if(!v.propina || !v.pagosExtra) return a;
+    const extraElectronico=(v.pagosExtra.banco||0)+(v.pagosExtra.tarjeta||0);
+    // La propina que entró por electrónico es lo menor entre la propina y el extra electrónico total
+    return a+Math.min(v.propina, extraElectronico);
+  },0);
   const totalDomicilios=vs.reduce((a,v)=>a+(v.valorDom||0),0);
   const totalRecargos=vs.reduce((a,v)=>a+(v.recargo||0),0);
   // Domicilios que entraron por banco (el restaurante se los paga al domiciliario en efectivo)
@@ -1410,6 +1505,7 @@ function caja(){
     <div class="card"><div class="card-title">${ic('i-orders')} No son ingreso del negocio</div>
       <p class="text-xs text-gray mb-2">Estos valores se cobran pero pertenecen a terceros. No suman a las ventas reales.</p>
       <div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${ic('i-users')} Propinas (del mesero)</span><strong class="text-green">${fmtMoney(totalPropinas)}</strong></div>
+      ${propinasPorBanco>0?`<div class="flex-between" style="padding:4px 0;"><span class="text-xs" style="color:var(--orange);">↳ de las cuales ${fmtMoney(propinasPorBanco)} entraron por banco (están en el banco del jefe, pero ya se descontaron de caja porque se pagan al mesero en efectivo)</span></div>`:''}
       <div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${ic('i-delivery')} Domicilios (del domiciliario)</span><strong class="text-blue">${fmtMoney(totalDomicilios)}</strong></div>
       <div class="flex-between" style="padding:9px 0;"><span>${ic('i-cash')} Recargos datáfono</span><strong class="text-gold">${fmtMoney(totalRecargos)}</strong></div>
       ${totalPropinas>0?`<hr class="divider"><div class="card-title" style="font-size:11px;">Propinas por mesero</div>${propinasPorMesero(vs)}`:''}
@@ -2171,8 +2267,10 @@ function arrancarColaImpr(){
   }, 3000);
 }
 function reimprimirComanda(id){
-  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  imprimirNavegador(ticketCocinaHTML(v)); toast('Reimprimiendo comanda...','info');
+  const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
+  v.reimpreso=(v.reimpreso||0)+1; // cuenta la copia (1, 2, 3, 4...)
+  fusionarYGuardarVentas(vs);
+  imprimirNavegador(ticketCocinaHTML(v)); toast(`Reimprimiendo comanda (copia ${v.reimpreso})...`,'info');
 }
 function reimprimirFactura(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
@@ -2393,6 +2491,15 @@ function buildModals(){
   <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
   <div id="modal-quitarprod" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-menu-food')} Quitar Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-quitarprod')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2" id="quitarprod-info"></p><p class="text-xs text-gray mb-2">Al quitar un producto, el total se recalcula y los pagos se ajustan automáticamente. Queda en auditoría.</p><div id="quitarprod-lista"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-quitarprod')">Cerrar</button></div></div></div>
+  <div id="modal-editpago" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Editar Forma de Pago</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-editpago')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="editpago-info"></p>
+    <p class="text-xs text-gray mb-2">Cambie cómo pagó el cliente. El total debe seguir igual. Queda registrado en auditoría.</p>
+    <div class="form-grid-2">
+      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="editpago-efectivo" placeholder="0" oninput="actualizarEditPago()"></div>
+      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="editpago-tarjeta" placeholder="0" oninput="actualizarEditPago()"></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Banco</label><input type="number" inputmode="numeric" id="editpago-banco" placeholder="0" oninput="actualizarEditPago()"></div>
+    </div>
+    <div style="text-align:center;font-size:13px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.2);" id="editpago-msg">—</div>
+    </div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-editpago')">Cancelar</button><button class="btn btn-gold" onclick="guardarEditPago()">${ic('i-check')} Guardar</button></div></div></div>
   <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p>
     <div class="form-grid-2">
       <div class="form-group"><label>Propina (del mesero)</label><input type="number" inputmode="numeric" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
@@ -2468,6 +2575,22 @@ function desbloquearPantalla(){
   else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
 }
 setInterval(updateClock,1000);
+// Detector de "llamado a mesero": si cocina llama a un mesero, suena en la pantalla del mesero.
+let _ultimoLlamados=-1;
+function revisarLlamadoMesero(){
+  if(!STATE.user) return;
+  // Aplica a meseros (y también admin/supervisor/cajero que ven pedidos)
+  const roles=['mesero','admin','supervisor','cajero'];
+  if(!roles.includes(STATE.user.rol)) return;
+  const vs=DB.get('ventas')||[];
+  const llamados=vs.filter(v=>v.llamadoMesero && v.estadoPedido!=='entregado' && v.estado!=='anulada').length;
+  if(_ultimoLlamados>=0 && llamados>_ultimoLlamados){
+    try{ sonidoListo(); }catch(e){}
+    try{ toast('🔔 Cocina llama: hay un pedido listo para recoger','info'); }catch(e){}
+  }
+  _ultimoLlamados=llamados;
+}
+setInterval(revisarLlamadoMesero, 4000);
 setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos'||STATE.page==='tiempos')){ showPage(STATE.page); } updateBadges(); },6000);
 let lastAct=Date.now();
 document.addEventListener('mousemove',()=>lastAct=Date.now());
