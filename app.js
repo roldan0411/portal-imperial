@@ -38,27 +38,27 @@ function borrarVentaSegura(id){
 }
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
 let SERVER_OFFSET = 0; // diferencia entre reloj del servidor y el del dispositivo (ms)
-// Colombia es UTC-5 todo el año (no tiene horario de verano). Guardamos y comparamos
-// las fechas en hora local de Colombia, para que el "día de operación" coincida con el
-// día real (evita que después de las 7pm el sistema crea que ya es el día siguiente).
+// Colombia es UTC-5 todo el año (no tiene horario de verano).
+// IMPORTANTE: now() guarda la hora REAL del instante (UTC estándar), para que los cálculos
+// de "tiempo transcurrido" (timers de cocina, etc.) siempre sean correctos.
+// La conversión a hora de Colombia se hace SOLO al mostrar fechas y al calcular el "día".
 const COL_OFFSET_MS = -5 * 60 * 60 * 1000; // UTC-5
-function nowColombia(){ return new Date(Date.now() + SERVER_OFFSET + COL_OFFSET_MS); }
-function now(){ return nowColombia().toISOString(); }
+function now(){ return new Date(Date.now() + SERVER_OFFSET).toISOString(); }
 function ahoraMs(){ return Date.now() + SERVER_OFFSET; }
-// El ISO guardado ya está en hora de Colombia (marcado como Z). Para mostrarlo tal cual,
-// usamos los métodos UTC (así no se vuelve a ajustar la zona horaria).
-function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—';
+// Para mostrar: convierte el instante real a hora de Colombia.
+function fmtDate(iso){ if(!iso) return '—'; const d=new Date(new Date(iso).getTime() + COL_OFFSET_MS); if(isNaN(d)) return '—';
   const dd=String(d.getUTCDate()).padStart(2,'0'), mm=String(d.getUTCMonth()+1).padStart(2,'0'), yy=d.getUTCFullYear();
   let h=d.getUTCHours(), min=String(d.getUTCMinutes()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12;
   return `${dd}/${mm}/${yy} ${h}:${min} ${ap}`;
 }
 function fmtMoney(n){ return '$ '+(Math.round(n)||0).toLocaleString('es-CO'); }
 function uid(){ return '_'+Math.random().toString(36).substr(2,9); }
-// today() usa la hora de Colombia (UTC-5), igual que now(), para que el filtro "de hoy"
-// coincida exactamente con la fecha guardada en cada pedido, incluso de noche.
-function today(){ return nowColombia().toISOString().split('T')[0]; }
-// ¿La venta es del mismo "día de operación"? Compara la parte de fecha (YYYY-MM-DD) del ISO.
-function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
+// El "día" en hora de Colombia a partir de un instante (o de ahora).
+function diaColombia(ms){ return new Date((ms!==undefined?ms:ahoraMs()) + COL_OFFSET_MS).toISOString().split('T')[0]; }
+// today() = el día actual en Colombia.
+function today(){ return diaColombia(); }
+// ¿La venta es del mismo "día de operación" en Colombia? Convierte la fecha guardada (UTC) a día Colombia.
+function esDeHoy(v){ if(!v.fecha) return false; return diaColombia(new Date(v.fecha).getTime()) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Una venta cuenta como ingreso solo si ya fue cobrada (pagada). Las mesas 'abierta' no suman.
 function esPagada(v){ return v.estado==='pagada'; }
@@ -1394,7 +1394,7 @@ function cocina(){
 function renderKDS(vs){
   if(vs.length===0) return `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos en cocina</p></div>`;
   return `<div class="kds-grid">${vs.map(v=>{
-    const min=Math.floor(((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000);
+    const min=Math.floor((ahoraMs()-new Date(v.fecha))/60000);
     const t=min<15?'verde':min<25?'amarillo':'rojo';
     return `<div class="kds-card t-${t}${v.pedidoAgregado?' kds-agregado':''}">
       ${v.pedidoAgregado?`<div style="background:var(--gold);color:#000;font-weight:bold;text-align:center;padding:4px;border-radius:6px;margin-bottom:8px;font-size:13px;">➕ AGREGARON A ESTA MESA</div>`:''}
@@ -1907,7 +1907,7 @@ function reportes(){
 
   // Horas pico (últimos 30 días): ventas por hora del día
   const horas=new Array(24).fill(0);
-  ventas30.forEach(v=>{ const h=new Date(v.fecha).getUTCHours(); horas[h]+=v.total; });
+  ventas30.forEach(v=>{ const h=new Date(new Date(v.fecha).getTime()+COL_OFFSET_MS).getUTCHours(); horas[h]+=v.total; });
   const maxHora=Math.max(...horas,1);
   const horasActivas=horas.map((tot,h)=>({h,tot})).filter(x=>x.tot>0);
 
@@ -2236,13 +2236,10 @@ function impresiones(){
     autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes, 4000);
   }
   const vs=DB.get('ventas')||[];
-  const cajaActual=DB.get('caja_actual');
-  // Pedidos recientes: de la caja abierta actual y de la última media hora.
-  // Si NO hay caja abierta, no se muestra nada (evita pedidos "pegados" tras cerrar caja).
-  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/3600000 < 3; };
-  const lista = cajaActual
-    ? vs.filter(v=>v.estado!=='anulada' && v.cajaId===cajaActual.id && reciente(v)).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))
-    : [];
+  // Pedidos recientes (última hora) para poder reimprimir. Se filtra por TIEMPO real,
+  // no por caja, para que siempre se puedan reimprimir las comandas recientes.
+  const reciente = v => { const dt=(ahoraMs()-new Date(v.fecha).getTime())/60000; return dt>=0 && dt < 60; };
+  const lista = vs.filter(v=>v.estado!=='anulada' && reciente(v)).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
   const autoOn = imprAutoActiva();
   return `
   <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
@@ -2306,7 +2303,7 @@ function procesarImpresionesPendientes(){
   const vs=DB.get('ventas')||[];
   const cajaActual=DB.get('caja_actual');
   if(!cajaActual) return; // sin caja abierta no se procesa nada (evita bucles)
-  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/60000 < 30; };
+  const reciente = v => { return (ahoraMs()-new Date(v.fecha).getTime())/60000 < 30; };
   // Recorrer del más viejo al más nuevo para mantener el ORDEN de llegada
   const ordenados=[...vs].filter(v=>v.cajaId===cajaActual.id).sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   ordenados.forEach(v=>{
@@ -2489,8 +2486,8 @@ function calcularJornadas(marcs){
   });
   return jornadas.sort((a,b)=>a.nombre.localeCompare(b.nombre));
 }
-function fmtHora(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—'; let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; return `${h}:${m} ${ap}`; }
-function fmtDiaSolo(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—'; return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`; }
+function fmtHora(iso){ if(!iso) return '—'; const d=new Date(new Date(iso).getTime()+COL_OFFSET_MS); if(isNaN(d)) return '—'; let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; return `${h}:${m} ${ap}`; }
+function fmtDiaSolo(iso){ if(!iso) return '—'; const d=new Date(new Date(iso).getTime()+COL_OFFSET_MS); if(isNaN(d)) return '—'; return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`; }
 function fmtDiaCorto(d){ const x=new Date(d+'T12:00:00'); return x.toLocaleDateString('es-CO',{weekday:'short',day:'2-digit',month:'2-digit'}); }
 
 function openModalEmpleado(id){
@@ -2621,7 +2618,7 @@ function buildModals(){
 }
 
 // ========================= CLOCK / TIMERS =========================
-function updateClock(){ const el=document.getElementById('time-display'); if(el){ const d=nowColombia(); let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'),s=String(d.getUTCSeconds()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; el.textContent=`${h}:${m}:${s} ${ap}`; } }
+function updateClock(){ const el=document.getElementById('time-display'); if(el){ const d=new Date(ahoraMs()+COL_OFFSET_MS); let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'),s=String(d.getUTCSeconds()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; el.textContent=`${h}:${m}:${s} ${ap}`; } }
 
 // ----- Modo táctil -----
 function toggleTactil(){
@@ -2801,7 +2798,7 @@ function revisarColaImpresion(){
   const cajaActual=DB.get('caja_actual');
   if(!cajaActual) return; // sin caja abierta no imprime nada pendiente
   // SOLO pedidos de la caja abierta y recientes (últimos 30 min). Evita bucles.
-  const reciente = v => { const dt=Math.abs(ahoraMs()-new Date(v.fecha).getTime()-COL_OFFSET_MS); return dt/60000 < 30; };
+  const reciente = v => { return (ahoraMs()-new Date(v.fecha).getTime())/60000 < 30; };
   const tickets=vs.filter(v=>v.estado!=='anulada' && v.cajaId===cajaActual.id && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
   const facturas=vs.filter(v=>v.estado==='pagada' && !v.facturaImpresa && reciente(v)).map(v=>({v,tipo:'factura'}));
   const pendientes=[...tickets,...facturas];
