@@ -38,14 +38,25 @@ function borrarVentaSegura(id){
 }
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
 let SERVER_OFFSET = 0; // diferencia entre reloj del servidor y el del dispositivo (ms)
-function now(){ return new Date(Date.now() + SERVER_OFFSET).toISOString(); }
+// Colombia es UTC-5 todo el año (no tiene horario de verano). Guardamos y comparamos
+// las fechas en hora local de Colombia, para que el "día de operación" coincida con el
+// día real (evita que después de las 7pm el sistema crea que ya es el día siguiente).
+const COL_OFFSET_MS = -5 * 60 * 60 * 1000; // UTC-5
+function nowColombia(){ return new Date(Date.now() + SERVER_OFFSET + COL_OFFSET_MS); }
+function now(){ return nowColombia().toISOString(); }
 function ahoraMs(){ return Date.now() + SERVER_OFFSET; }
-function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleDateString('es-CO')+' '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}); }
+// El ISO guardado ya está en hora de Colombia (marcado como Z). Para mostrarlo tal cual,
+// usamos los métodos UTC (así no se vuelve a ajustar la zona horaria).
+function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—';
+  const dd=String(d.getUTCDate()).padStart(2,'0'), mm=String(d.getUTCMonth()+1).padStart(2,'0'), yy=d.getUTCFullYear();
+  let h=d.getUTCHours(), min=String(d.getUTCMinutes()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12;
+  return `${dd}/${mm}/${yy} ${h}:${min} ${ap}`;
+}
 function fmtMoney(n){ return '$ '+(Math.round(n)||0).toLocaleString('es-CO'); }
 function uid(){ return '_'+Math.random().toString(36).substr(2,9); }
-// today() usa el MISMO instante y formato que now() (la fecha ISO del servidor),
-// así el filtro "de hoy" coincide exactamente con la fecha guardada en cada pedido.
-function today(){ return new Date(Date.now() + SERVER_OFFSET).toISOString().split('T')[0]; }
+// today() usa la hora de Colombia (UTC-5), igual que now(), para que el filtro "de hoy"
+// coincida exactamente con la fecha guardada en cada pedido, incluso de noche.
+function today(){ return nowColombia().toISOString().split('T')[0]; }
 // ¿La venta es del mismo "día de operación"? Compara la parte de fecha (YYYY-MM-DD) del ISO.
 function esDeHoy(v){ return (v.fecha||'').slice(0,10) === today(); }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -298,7 +309,7 @@ function registrarMarcacion(emp,tipo){
   if(ultimaHoy && ultimaHoy.tipo===tipo){ asisMsg(`Ya registró ${tipo} hace un momento.`,false); return; }
   marcs.unshift({id:uid(),empId:emp.id,nombre:emp.nombre,cedula:emp.cedula,tipo,fecha:now()});
   DB.set('marcaciones',marcs);
-  const hora=new Date(ahoraMs()).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
+  const hora=fmtHora(now());
   asisMsg(`${emp.nombre}: ${tipo.toUpperCase()} registrada a las ${hora}`,true);
   document.getElementById('asis-cedula').value='';
   document.getElementById('asis-codigo').value='';
@@ -381,31 +392,42 @@ function showPage(name){
 // ========================= DASHBOARD =========================
 function dashboard(){
   const vs=DB.get('ventas')||[]; const t=today();
-  const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v));
+  // "Ventas Hoy" = la JORNADA actual (la caja abierta), sin importar la hora.
+  // Si la caja sigue abierta a las 3 am, esas ventas cuentan para la misma jornada.
+  const cajaActual=DB.get('caja_actual');
+  let hoy, tituloHoy='Ventas Hoy';
+  if(cajaActual){
+    // Ventas de la caja abierta (la jornada en curso)
+    hoy=vs.filter(v=>v.cajaId===cajaActual.id && esPagada(v));
+    tituloHoy='Ventas de la Jornada';
+  } else {
+    // No hay caja abierta: mostrar las ventas del día calendario (Colombia)
+    hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v));
+  }
   const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
-  const weekAgo=new Date(Date.now()-7*864e5).toISOString().split('T')[0];
+  const weekAgo=new Date(ahoraMs()+COL_OFFSET_MS-7*864e5).toISOString().split('T')[0];
   const sem=vs.filter(v=>v.fecha>=weekAgo&&esPagada(v));
-  const ma=new Date(); ma.setDate(1);
+  const ma=new Date(ahoraMs()+COL_OFFSET_MS); ma.setUTCDate(1);
   const mes=vs.filter(v=>v.fecha>=ma.toISOString().split('T')[0]&&esPagada(v));
   const activos=vs.filter(v=>v.estadoPedido==='activo'&&v.estado!=='anulada').length;
   const entregados=vs.filter(v=>v.estadoPedido==='entregado').length;
   const metodos={}; METODOS_PAGO.forEach(([k])=>metodos[k]=0);
   hoy.forEach(v=>{ if(metodos[v.metodo]!==undefined) metodos[v.metodo]+=(v.ventaReal!==undefined?v.ventaReal:v.total); });
   const days=[];
-  for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5); const dk=d.toISOString().split('T')[0];
-    days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)).reduce((a,v)=>a+v.total,0)}); }
+  for(let i=6;i>=0;i--){ const d=new Date(ahoraMs()+COL_OFFSET_MS-i*864e5); const dk=d.toISOString().split('T')[0];
+    days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short',timeZone:'UTC'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)).reduce((a,v)=>a+v.total,0)}); }
   const mx=Math.max(...days.map(d=>d.tot),1);
   const bars=days.map(d=>`<div class="bar-item"><div class="bar-val">${d.tot>0?(d.tot/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.tot/mx)*90)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('');
   return `
   <div class="stats-grid">
-    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Ventas Hoy</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} pedidos</div></div>
+    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">${tituloHoy}</div><div class="stat-value">${fmtMoney(totalHoy)}</div><div class="stat-sub">${hoy.length} pedidos</div></div>
     <div class="stat-card gold"><div class="stat-icon">${ic('i-history')}</div><div class="stat-label">Esta Semana</div><div class="stat-value">${fmtMoney(sem.reduce((a,v)=>a+v.total,0))}</div><div class="stat-sub">${sem.length} pedidos</div></div>
     <div class="stat-card green"><div class="stat-icon">${ic('i-report')}</div><div class="stat-label">Este Mes</div><div class="stat-value">${fmtMoney(mes.reduce((a,v)=>a+v.total,0))}</div><div class="stat-sub">${mes.length} pedidos</div></div>
     <div class="stat-card blue"><div class="stat-icon">${ic('i-bell')}</div><div class="stat-label">Pedidos Activos</div><div class="stat-value">${activos}</div><div class="stat-sub">${entregados} entregados</div></div>
   </div>
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-report')} Ventas Últimos 7 Días</div><div class="bar-chart">${bars}</div></div>
-    <div class="card"><div class="card-title">${ic('i-cash')} Métodos de Pago (Hoy)</div>
+    <div class="card"><div class="card-title">${ic('i-cash')} Métodos de Pago (${cajaActual?'Jornada':'Hoy'})</div>
       ${METODOS_PAGO.map(([k,l])=>`<div class="flex-between" style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.04)"><span class="text-sm">${l}</span><span class="text-gold font-bold">${fmtMoney(metodos[k])}</span></div>`).join('')}
     </div>
   </div>
@@ -1360,7 +1382,7 @@ function cocina(){
 function renderKDS(vs){
   if(vs.length===0) return `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos en cocina</p></div>`;
   return `<div class="kds-grid">${vs.map(v=>{
-    const min=Math.floor((ahoraMs()-new Date(v.fecha))/60000);
+    const min=Math.floor(((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000);
     const t=min<15?'verde':min<25?'amarillo':'rojo';
     return `<div class="kds-card t-${t}${v.pedidoAgregado?' kds-agregado':''}">
       ${v.pedidoAgregado?`<div style="background:var(--gold);color:#000;font-weight:bold;text-align:center;padding:4px;border-radius:6px;margin-bottom:8px;font-size:13px;">➕ AGREGARON A ESTA MESA</div>`:''}
@@ -1431,7 +1453,7 @@ function caja(){
       </div>
       ${cierres.length>0&&puedeAbrir?`<div class="card mt-2"><div class="card-title">${ic('i-history')} Historial de Cierres del Mes</div>
       <p class="text-xs text-gray mb-2">Los cierres se guardan durante el mes actual y el anterior. Se limpian automáticamente para mantener el control ordenado.</p>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Día</th><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Hora cierre</th></tr></thead><tbody>${cierres.map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; const dia=c.cierre?new Date(c.cierre).toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'numeric'}):'—'; return `<tr><td class="font-bold">${dia}</td><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${c.cierre?new Date(c.cierre).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}):'—'}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>Día</th><th>Cajero</th><th>Fondo</th><th>Total Ventas</th><th>Esperado</th><th>Contado</th><th>Cuadre</th><th>Hora cierre</th></tr></thead><tbody>${cierres.map(c=>{ const d=c.diferencia; const cuadre = d===undefined?'<span class="text-gray">—</span>':d===0?'<span class="badge badge-green">Cuadrada</span>':d>0?`<span class="badge badge-blue">Sobra ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Falta ${fmtMoney(Math.abs(d))}</span>`; const dia=c.cierre?fmtDiaSolo(c.cierre):'—'; return `<tr><td class="font-bold">${dia}</td><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.fondo)}</td><td class="font-bold text-gold">${fmtMoney(c.total)}</td><td>${c.esperadoEfectivo!==undefined?fmtMoney(c.esperadoEfectivo):'—'}</td><td>${c.contadoEfectivo!==undefined?fmtMoney(c.contadoEfectivo):'—'}</td><td>${cuadre}</td><td class="text-xs text-gray">${c.cierre?fmtHora(c.cierre):'—'}</td></tr>`; }).join('')}</tbody></table></div></div>`:''}`;
   }
   const movs=c.movimientos||[];
   const vs=(DB.get('ventas')||[]).filter(v=>esPagada(v)&&v.cajaId===c.id);
@@ -1863,7 +1885,7 @@ function reportes(){
 
   // Horas pico (últimos 30 días): ventas por hora del día
   const horas=new Array(24).fill(0);
-  ventas30.forEach(v=>{ const h=new Date(v.fecha).getHours(); horas[h]+=v.total; });
+  ventas30.forEach(v=>{ const h=new Date(v.fecha).getUTCHours(); horas[h]+=v.total; });
   const maxHora=Math.max(...horas,1);
   const horasActivas=horas.map((tot,h)=>({h,tot})).filter(x=>x.tot>0);
 
@@ -2193,7 +2215,7 @@ function impresiones(){
   }
   const vs=DB.get('ventas')||[];
   // Pedidos recientes (últimas 3 horas), no anulados
-  const reciente = v => (ahoraMs()-new Date(v.fecha))/3600000 < 3;
+  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/3600000 < 3;
   const lista=vs.filter(v=>v.estado!=='anulada' && reciente(v))
     .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
   const autoOn = imprAutoActiva();
@@ -2257,7 +2279,7 @@ const colaImprIds=new Set(); // para no encolar dos veces lo mismo
 function procesarImpresionesPendientes(){
   if(!imprAutoActiva()) return;
   const vs=DB.get('ventas')||[];
-  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30; // últimos 30 min
+  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000 < 30; // últimos 30 min
   // Recorrer del más viejo al más nuevo para mantener el ORDEN de llegada
   const ordenados=[...vs].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   ordenados.forEach(v=>{
@@ -2440,7 +2462,8 @@ function calcularJornadas(marcs){
   });
   return jornadas.sort((a,b)=>a.nombre.localeCompare(b.nombre));
 }
-function fmtHora(iso){ return new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}); }
+function fmtHora(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—'; let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; return `${h}:${m} ${ap}`; }
+function fmtDiaSolo(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—'; return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`; }
 function fmtDiaCorto(d){ const x=new Date(d+'T12:00:00'); return x.toLocaleDateString('es-CO',{weekday:'short',day:'2-digit',month:'2-digit'}); }
 
 function openModalEmpleado(id){
@@ -2571,7 +2594,7 @@ function buildModals(){
 }
 
 // ========================= CLOCK / TIMERS =========================
-function updateClock(){ const el=document.getElementById('time-display'); if(el) el.textContent=new Date(ahoraMs()).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+function updateClock(){ const el=document.getElementById('time-display'); if(el){ const d=nowColombia(); let h=d.getUTCHours(),m=String(d.getUTCMinutes()).padStart(2,'0'),s=String(d.getUTCSeconds()).padStart(2,'0'); const ap=h>=12?'p. m.':'a. m.'; h=h%12||12; el.textContent=`${h}:${m}:${s} ${ap}`; } }
 
 // ----- Modo táctil -----
 function toggleTactil(){
@@ -2749,7 +2772,7 @@ function revisarColaImpresion(){
   if(imprimiendoCola) return;
   const vs=DB.get('ventas')||[];
   // SOLO pedidos recientes (últimos 30 min). Evita imprimir todo el histórico en bucle.
-  const reciente = v => (ahoraMs()-new Date(v.fecha))/60000 < 30;
+  const reciente = v => ((ahoraMs()+COL_OFFSET_MS)-new Date(v.fecha))/60000 < 30;
   const tickets=vs.filter(v=>v.estado!=='anulada' && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
   const facturas=vs.filter(v=>v.estado==='pagada' && !v.facturaImpresa && reciente(v)).map(v=>({v,tipo:'factura'}));
   const pendientes=[...tickets,...facturas];
