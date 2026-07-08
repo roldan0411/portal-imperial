@@ -1260,13 +1260,15 @@ function confirmarCobroMesa(){
   const pagosExtra={ efectivo:restante.efectivo, tarjeta:restante.tarjeta, banco:restante.banco };
 
   // ===== EXTRAS QUE SALEN DEL CAJÓN =====
-  // Propina, recargo y domicilio NO son del negocio. Cuando el cliente los paga por
-  // BANCO/TARJETA (electrónico), ese dinero entra al banco, pero al dueño (mesero/domiciliario)
-  // se le paga en EFECTIVO del cajón. Entonces ESE efectivo sale del cajón.
-  // extraElectronico = parte de los extras que entró por banco/tarjeta.
-  const extraElectronico = (pagosExtra.banco||0) + (pagosExtra.tarjeta||0);
-  // Todo el extra electrónico se paga al mesero/domiciliario en efectivo → sale del cajón.
-  const extraSaleEfectivo = extraElectronico;
+  // Solo la PROPINA y el DOMICILIO que entran por banco/tarjeta se pagan al mesero/domiciliario
+  // en EFECTIVO del cajón → ese efectivo sale. El RECARGO del datáfono NO sale del cajón:
+  // se lo queda el banco/datáfono, no se le paga a nadie en efectivo.
+  // Entonces: extraSaleEfectivo = (propina + domicilio-por-banco) que entró por electrónico.
+  const extraElectronicoTotal = (pagosExtra.banco||0) + (pagosExtra.tarjeta||0);
+  // El recargo que entró por electrónico NO sale del cajón. Lo restamos del total electrónico.
+  // (El recargo casi siempre se paga por tarjeta/banco, que es donde aplica el datáfono.)
+  const recargoElectronico = Math.min(recargo, extraElectronicoTotal);
+  const extraSaleEfectivo = Math.max(0, extraElectronicoTotal - recargoElectronico);
 
   // Guardar todo separado y claro
   v.comida=comida;
@@ -1349,7 +1351,10 @@ function guardarEditPago(){
     pagosVenta[k]+=toma; restante[k]-=toma; porCubrir-=toma;
   }
   const pagosExtra={efectivo:restante.efectivo,tarjeta:restante.tarjeta,banco:restante.banco};
-  const extraSaleEfectivo=(pagosExtra.banco||0)+(pagosExtra.tarjeta||0);
+  // El recargo del datáfono NO sale del cajón (se lo queda el banco). Solo propina+domicilio por banco.
+  const extraElectronicoTotal=(pagosExtra.banco||0)+(pagosExtra.tarjeta||0);
+  const recargoElectronico=Math.min(v.recargo||0, extraElectronicoTotal);
+  const extraSaleEfectivo=Math.max(0, extraElectronicoTotal - recargoElectronico);
   const pagoAntes=v.metodo;
   v.pagos={efectivo:ef,tarjeta:ta,banco:ba};
   v.pagosVenta=pagosVenta;
