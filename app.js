@@ -1224,12 +1224,16 @@ function actualizarRepartoCobro(){
   const ef=parseFloat(document.getElementById('pago-efectivo')?.value)||0;
   const ta=parseFloat(document.getElementById('pago-tarjeta')?.value)||0;
   const ba=parseFloat(document.getElementById('pago-banco')?.value)||0;
+  // Mostrar cada monto con punto de miles debajo del campo (más fácil de leer al cobrar)
+  const pe=document.getElementById('prev-efectivo'); if(pe) pe.textContent = ef>0?fmtMoney(ef):'';
+  const pt=document.getElementById('prev-tarjeta'); if(pt) pt.textContent = ta>0?fmtMoney(ta):'';
+  const pb=document.getElementById('prev-banco'); if(pb) pb.textContent = ba>0?fmtMoney(ba):'';
   const suma=ef+ta+ba;
   const msg=document.getElementById('cobro-reparto-msg');
   if(!msg) return;
   const falta=cobroTotalCliente-suma;
   if(suma===0){ msg.innerHTML='<span class="text-gray">Escriba cómo paga el cliente</span>'; }
-  else if(Math.abs(falta)<1){ msg.innerHTML='<span class="text-green font-bold">✓ Pago completo</span>'; }
+  else if(Math.abs(falta)<1){ msg.innerHTML='<span class="text-green font-bold">✓ Pago completo · '+fmtMoney(suma)+'</span>'; }
   else if(falta>0){ msg.innerHTML=`<span class="text-gold">Falta ${fmtMoney(falta)}</span>`; }
   else { msg.innerHTML=`<span class="text-red">Sobra ${fmtMoney(Math.abs(falta))} (revise)</span>`; }
 }
@@ -1771,6 +1775,7 @@ function calcularDiferencia(){
   const esperado=window._cierreEsperado||0;
   const dif=contado-esperado;
   const el=document.getElementById('cierre-dif');
+  const prev=document.getElementById('cierre-contado-prev'); if(prev) prev.textContent = contado>0?'Contaste: '+fmtMoney(contado):'';
   if(!document.getElementById('cierre-contado').value){ el.innerHTML='<span class="text-gray">Cuente el efectivo del cajón</span>'; return; }
   if(dif===0) el.innerHTML=`<span class="text-green font-bold">✓ Caja cuadrada perfectamente</span>`;
   else if(dif>0) el.innerHTML=`<span style="color:var(--blue-l);font-weight:700;">Sobra ${fmtMoney(dif)}</span>`;
@@ -2613,7 +2618,7 @@ function buildModals(){
 
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"><p class="text-xs text-gray mt-1" id="caja-base-aviso"></p></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
 
-  <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
+  <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"><div class="text-xs text-gold" id="cierre-contado-prev" style="margin-top:3px;min-height:14px;"></div></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
   <div id="modal-quitarprod" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-menu-food')} Quitar Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-quitarprod')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2" id="quitarprod-info"></p><p class="text-xs text-gray mb-2">Al quitar un producto, el total se recalcula y los pagos se ajustan automáticamente. Queda en auditoría.</p><div id="quitarprod-lista"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-quitarprod')">Cerrar</button></div></div></div>
   <div id="modal-editpago" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Editar Forma de Pago</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-editpago')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="editpago-info"></p>
@@ -2643,9 +2648,9 @@ function buildModals(){
     <label class="text-sm" style="display:block;margin-bottom:6px;">¿Cómo paga el cliente?</label>
     <p class="text-xs text-gray mb-2">Escriba cuánto paga en cada forma. Puede combinar varias. Deje en 0 las que no use.</p>
     <div class="form-grid-2">
-      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="pago-efectivo" placeholder="0" oninput="actualizarRepartoCobro()"></div>
-      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="pago-tarjeta" placeholder="0" oninput="actualizarRepartoCobro()"></div>
-      <div class="form-group" style="grid-column:1/-1"><label>Banco <span class="text-xs text-gray">(transferencia)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarRepartoCobro()"></div>
+      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="pago-efectivo" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-efectivo" style="margin-top:2px;min-height:14px;"></div></div>
+      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="pago-tarjeta" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-tarjeta" style="margin-top:2px;min-height:14px;"></div></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Banco <span class="text-xs text-gray">(transferencia)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-banco" style="margin-top:2px;min-height:14px;"></div></div>
     </div>
     <div style="text-align:center;font-size:13px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.2);" id="cobro-reparto-msg">—</div>
     </div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" id="btn-confirmar-cobro" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar</button></div></div></div>
