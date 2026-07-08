@@ -98,14 +98,22 @@ function montoPorMetodoDe(v, metodo){
   if(v.pagos && typeof v.pagos==='object') return v.pagos[metodo]||0;
   return v.metodo===metodo ? (v.total||0) : 0;
 }
-// Extras (propina + recargo + domicilio) que entraron por BANCO/TARJETA y se le pagan
-// a su dueño (mesero/domiciliario) en EFECTIVO del cajón. Ese efectivo SALE de la caja.
-// Esto evita que sobre plata en el sistema. Se calcula una sola vez al cobrar (extraSaleEfectivo).
+// Extras que salen del cajón: PROPINA + DOMICILIO que entraron por banco/tarjeta y se le
+// pagan a su dueño (mesero/domiciliario) en EFECTIVO del cajón. El RECARGO del datáfono NO
+// sale del cajón (se lo queda el banco), por eso se EXCLUYE siempre.
+// Se recalcula en vivo (no confía en valores viejos) para corregir pedidos ya guardados.
 function domicilioSalidaEfectivo(v){
   if(v.estado!=='pagada') return 0;
-  // Modelo nuevo: ya viene calculado el extra electrónico que se paga en efectivo.
-  if(v.extraSaleEfectivo!==undefined) return v.extraSaleEfectivo||0;
-  // Respaldo modelo viejo: solo domicilio por banco.
+  const recargo=v.recargo||0;
+  // Si tenemos el detalle de pagos, calculamos el extra electrónico y le quitamos el recargo.
+  if(v.pagosVenta && v.pagos){
+    let extraElectronico=0;
+    ['banco','tarjeta'].forEach(k=>{ const total=v.pagos[k]||0, venta=v.pagosVenta[k]||0; extraElectronico+=Math.max(0,total-venta); });
+    // Quitar el recargo (que entró por electrónico pero NO sale del cajón)
+    const recargoElectronico=Math.min(recargo, extraElectronico);
+    return Math.max(0, extraElectronico - recargoElectronico);
+  }
+  // Respaldo: si solo hay domicilio por banco marcado
   if(v.valorDom>0 && v.domPorBanco) return v.valorDom;
   return 0;
 }
