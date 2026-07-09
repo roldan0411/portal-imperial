@@ -829,7 +829,7 @@ function imprimirConQZ(html){
     });
     const data = [{
       type:'pixel', format:'html', flavor:'plain',
-      data:`<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:72mm;font-family:'Courier New',monospace;color:#000;}</style></head><body><div style="width:72mm;padding:2mm;">${html}</div></body></html>`
+      data:`<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:72mm;font-family:'Inter','Segoe UI',Arial,sans-serif;color:#000;}</style></head><body><div style="width:72mm;padding:2mm;">${html}</div></body></html>`
     }];
     return qz.print(config, data);
   });
@@ -874,7 +874,7 @@ function imprimirNavegador(html){
   pa.style.display='none';
 }
 function probarImpresionQZ(){
-  const html=`<div style="text-align:center;font-family:'Courier New',monospace;">
+  const html=`<div style="text-align:center;font-family:'Inter',sans-serif;">
     <div style="font-size:18px;font-weight:bold;">PRUEBA DE IMPRESIÓN</div>
     <div style="font-size:14px;margin-top:8px;">Portal Imperial</div>
     <div style="font-size:13px;margin-top:6px;">Si lees esto, QZ Tray funciona ✓</div>
@@ -895,7 +895,7 @@ function facturaHTML(v){
   const esDom = v.tipo==='domicilio';
   const subtotalItems = v.items.reduce((a,i)=>a+i.precio*i.qty,0);
   return `
-  <div style="font-family:'Courier New',monospace;color:#000;">
+  <div style="font-family:'Inter',sans-serif;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
       ${cfg.logo?`<img src="${cfg.logo}" style="max-height:150px;max-width:280px;margin-bottom:8px;">`:''}
       <div style="font-size:24px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
@@ -958,7 +958,7 @@ function ticketCocinaHTML(v){
   return `
   <div style="font-family:'Courier New',monospace;color:#000;text-align:center;">
     <div style="font-size:16px;letter-spacing:2px;font-weight:bold;">*** COCINA ***</div>
-    ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;background:#000;color:#fff;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;">a una mesa que ya estaba servida</span></div>`:''}
+    ${v.pedidoAgregado?`<div style="border:3px solid #000;padding:6px;margin:4px 0;font-size:22px;font-weight:bold;color:#000;">➕ AGREGARON PEDIDO ➕<br><span style="font-size:14px;font-weight:normal;">a una mesa que ya estaba servida</span></div>`:''}
     ${v.copiaImpr?`<div style="display:inline-block;border:2px solid #000;padding:2px 10px;margin:4px 0;font-size:14px;font-weight:bold;border-radius:4px;">COPIA ${v.copiaImpr}</div>`:''}
     ${encabezado}
     <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:8px 0;font-size:28px;font-weight:bold;">${destino}</div>
@@ -974,7 +974,7 @@ function ticketCocinaHTML(v){
     <div style="text-align:center;font-size:13px;font-weight:bold;margin-bottom:6px;">— PEDIDO COMPLETO —</div>
     ${v.items.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:8px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
     ${v.pedidoAgregado&&v.itemsAgregados&&v.itemsAgregados.length?`
-      <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:10px 0;background:#000;color:#fff;">
+      <div style="border:3px solid #000;border-radius:6px;padding:8px;margin:10px 0;color:#000;">
         <div style="text-align:center;font-size:15px;font-weight:bold;margin-bottom:6px;">➕ NUEVO — AGREGADO AHORA ➕</div>
         ${v.itemsAgregados.map(i=>`<div style="font-size:22px;font-weight:bold;margin-bottom:6px;line-height:1.2;">${i.qty} x ${escapeHtml(i.nombre)}${i.obs?`<div style="font-size:15px;font-weight:normal;padding-left:10px;">&gt;&gt; ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
       </div>
@@ -1813,36 +1813,36 @@ function confirmarCierre(){
 function imprimirCierre(c){
   const cfg=DB.get('config')||{};
   const dif=c.diferencia||0;
-  const html=`<div style="font-family:'Courier New',monospace;color:#000;">
-    <div style="text-align:center;font-size:15px;font-weight:bold;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
-    <div style="text-align:center;font-size:13px;font-weight:bold;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0;margin:6px 0;">CIERRE DE CAJA</div>
-    <div style="font-size:11px;line-height:1.7;">
+  const html=`<div style="font-family:'Inter',sans-serif;color:#000;font-weight:600;">
+    <div style="text-align:center;font-size:20px;font-weight:800;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
+    <div style="text-align:center;font-size:18px;font-weight:800;border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;margin:8px 0;">CIERRE DE CAJA</div>
+    <div style="font-size:14px;line-height:1.8;font-weight:700;">
       <div style="display:flex;justify-content:space-between;"><span>Cajero:</span><span>${escapeHtml(c.cajero)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Apertura:</span><span>${fmtDate(c.apertura)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Cierre:</span><span>${fmtDate(c.cierre)}</span></div>
     </div>
-    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:11px;line-height:1.7;">
+    <div style="border-top:2px solid #000;margin:8px 0;padding-top:8px;font-size:15px;line-height:1.9;font-weight:700;">
       <div style="display:flex;justify-content:space-between;"><span>Base inicial</span><span>${fmtMoney(c.fondo)}</span></div>
       ${METODOS_PAGO.map(([k,l])=>`<div style="display:flex;justify-content:space-between;"><span>Ventas ${l}</span><span>${fmtMoney((c.porMetodo&&c.porMetodo[k])||0)}</span></div>`).join('')}
       <div style="display:flex;justify-content:space-between;"><span>Entradas</span><span>${fmtMoney(c.entradas||0)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Gastos/nómina</span><span>-${fmtMoney(c.gastos||0)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Retiros</span><span>-${fmtMoney(c.retiros||0)}</span></div>
     </div>
-    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:10px;line-height:1.6;color:#333;">
+    <div style="border-top:2px solid #000;margin:8px 0;padding-top:8px;font-size:13px;line-height:1.8;font-weight:700;">
       <div style="display:flex;justify-content:space-between;"><span>Propinas (no ingreso)</span><span>${fmtMoney(c.propinas||0)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Domicilios (no ingreso)</span><span>${fmtMoney(c.domicilios||0)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Recargos datáfono</span><span>${fmtMoney(c.recargos||0)}</span></div>
     </div>
-    <div style="border-top:1px dashed #000;margin:6px 0;padding-top:6px;font-size:12px;line-height:1.8;">
-      <div style="display:flex;justify-content:space-between;font-weight:bold;"><span>Total ventas reales</span><span>${fmtMoney(c.total)}</span></div>
+    <div style="border-top:2px solid #000;margin:8px 0;padding-top:8px;font-size:16px;line-height:2;font-weight:800;">
+      <div style="display:flex;justify-content:space-between;"><span>Total ventas reales</span><span>${fmtMoney(c.total)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Efectivo esperado</span><span>${fmtMoney(c.esperadoEfectivo)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Efectivo contado</span><span>${fmtMoney(c.contadoEfectivo)}</span></div>
     </div>
-    <div style="border:2px solid #000;border-radius:4px;margin-top:6px;padding:6px;text-align:center;font-size:14px;font-weight:bold;">
+    <div style="border:3px solid #000;border-radius:6px;margin-top:8px;padding:10px;text-align:center;font-size:20px;font-weight:800;">
       ${dif===0?'CAJA CUADRADA':dif>0?'SOBRA '+fmtMoney(dif):'FALTA '+fmtMoney(Math.abs(dif))}
     </div>
-    ${c.obsCierre?`<div style="font-size:10px;margin-top:6px;">Obs: ${escapeHtml(c.obsCierre)}</div>`:''}
-    <div style="text-align:center;font-size:10px;margin-top:8px;">Firma: _______________</div>
+    ${c.obsCierre?`<div style="font-size:13px;margin-top:8px;font-weight:700;">Obs: ${escapeHtml(c.obsCierre)}</div>`:''}
+    <div style="text-align:center;font-size:13px;margin-top:12px;font-weight:700;">Firma: _______________</div>
   </div>`;
   imprimirHTML(html);
 }
