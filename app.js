@@ -907,7 +907,7 @@ function facturaHTML(v){
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:7px 0;text-align:center;margin:4px 0;">
       <div style="font-size:17px;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA '+v.factura}</div>
     </div>
-    <div style="font-size:15px;line-height:1.7;margin:6px 0;font-weight:bold;">
+    <div style="font-size:15px;line-height:1.7;margin:6px 0;">
       <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${fmtDate(v.fechaCobro||v.fecha)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Tipo:</span><span>${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}</span></div>
       ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
@@ -922,7 +922,7 @@ function facturaHTML(v){
       <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:4px;">
         <span style="flex:1;">CANT / PRODUCTO</span><span>VALOR</span>
       </div>
-      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:15px;font-weight:bold;padding:3px 0;line-height:1.3;"><span style="flex:1;">${i.qty} x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
+      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:15px;padding:3px 0;line-height:1.3;"><span style="flex:1;">${i.qty} x ${escapeHtml(i.nombre)}</span><span>${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
     </div>
     <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:15px;">
       <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
@@ -934,13 +934,13 @@ function facturaHTML(v){
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:9px 0;display:flex;justify-content:space-between;font-size:22px;font-weight:bold;">
       <span>TOTAL</span><span>${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
     </div>
-    <div style="text-align:center;font-size:14px;font-weight:bold;margin-top:5px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
+    <div style="text-align:center;font-size:14px;margin-top:5px;">Forma de pago: ${nombreMetodo(v.metodo).toUpperCase()}</div>
     ${v.obs?`<div style="border-top:1px dashed #000;margin-top:8px;padding-top:6px;font-size:13px;"><strong>Observación:</strong> ${escapeHtml(v.obs)}</div>`:''}
     <div style="text-align:center;margin-top:12px;font-size:15px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
-    <div style="text-align:center;font-size:14px;color:#333;margin-top:4px;font-weight:bold;">Lo esperamos pronto</div>
+    <div style="text-align:center;font-size:14px;color:#333;margin-top:4px;">Lo esperamos pronto</div>
     <div style="text-align:center;font-size:18px;margin-top:6px;letter-spacing:3px;">★ ★ ★</div>
     ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:17px;color:#000;margin-top:12px;letter-spacing:1px;border-top:2px dotted #666;padding-top:10px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
-    <div style="text-align:center;font-size:13px;color:#333;margin-top:8px;font-weight:bold;letter-spacing:0.5px;border-top:1px dashed #999;padding-top:8px;">
+    <div style="text-align:center;font-size:13px;color:#333;margin-top:8px;letter-spacing:0.5px;border-top:1px dashed #999;padding-top:8px;">
       wallacecompany11@gmail.com
     </div>
   </div>`;
