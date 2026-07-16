@@ -342,6 +342,7 @@ const NAV = [
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor','jefe']},
   {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe']},
+  {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
   {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe']},
   {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor','jefe']},
@@ -378,7 +379,7 @@ const PAGE_META={
   dashboard:['i-dashboard','Dashboard'], ventas:['i-cart','Nueva Venta'], pedidos:['i-orders','Pedidos'],
   listos:['i-ready','Pedidos Listos'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
-  reportes:['i-report','Reportes'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
+  reportes:['i-report','Reportes'], contable:['i-report','Registro Contable Mensual'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
   asistencia:['i-clock','Control de Asistencia'],
   tiempos:['i-clock','Tiempos de Entrega'],
   impresiones:['i-orders','Impresiones']
@@ -390,7 +391,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,auditoria,menu,config,asistencia,tiempos,impresiones};
+  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,contable,auditoria,menu,config,asistencia,tiempos,impresiones};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -1942,6 +1943,206 @@ function renderHistTable(vs){
 }
 
 // ========================= REPORTES =========================
+// ========================= REGISTRO CONTABLE MENSUAL =========================
+// Informe interno de gestión para el dueño (NO es tributario, NO tiene que ver con la DIAN).
+let _contableMes = null; // 'YYYY-MM' seleccionado; null = mes actual
+function contable(){
+  if(STATE.user.rol!=='admin'){ return '<div class="card"><p class="text-gray">Solo el administrador puede ver el Registro Contable.</p></div>'; }
+  const vs=DB.get('ventas')||[];
+  const cierres=DB.get('cierres')||[];
+  // Mes seleccionado (por defecto el actual, en hora Colombia)
+  const mesActual=diaColombia().substring(0,7);
+  const mes=_contableMes||mesActual;
+  const [anio,mesNum]=mes.split('-').map(Number);
+  // Mes anterior para comparativo
+  const dPrev=new Date(Date.UTC(anio, mesNum-1, 1)); dPrev.setUTCMonth(dPrev.getUTCMonth()-1);
+  const mesPrev=dPrev.toISOString().substring(0,7);
+
+  // Un pedido es del mes X si su día Colombia cae en ese mes
+  const delMes=(v,m)=>{ if(!v.fecha) return false; return diaColombia(new Date(v.fecha).getTime()).substring(0,7)===m; };
+  const ventasMes=vs.filter(v=>esPagada(v)&&delMes(v,mes));
+  const ventasPrev=vs.filter(v=>esPagada(v)&&delMes(v,mesPrev));
+
+  // ── VENTAS (solo comida = ingreso real) por método
+  const ventaComida = v => (v.ventaReal!==undefined?v.ventaReal:v.total)||0;
+  const totalVentas=ventasMes.reduce((a,v)=>a+ventaComida(v),0);
+  const totalVentasPrev=ventasPrev.reduce((a,v)=>a+ventaComida(v),0);
+  const porMetodo={efectivo:0,banco:0,tarjeta:0};
+  ventasMes.forEach(v=>{ ['efectivo','banco','tarjeta'].forEach(k=>{ porMetodo[k]+=montoPorMetodoDe(v,k); }); });
+  const difVentas=totalVentas-totalVentasPrev;
+  const pctVentas=totalVentasPrev>0?Math.round((difVentas/totalVentasPrev)*100):0;
+
+  // ── DINERO DE TERCEROS (no es ingreso del negocio)
+  const totalPropinas=ventasMes.reduce((a,v)=>a+(v.propina||0),0);
+  const totalDomicilios=ventasMes.reduce((a,v)=>a+(v.valorDom||0),0);
+  const totalRecargos=ventasMes.reduce((a,v)=>a+(v.recargo||0),0);
+
+  // ── EGRESOS del mes (de los movimientos de caja de los cierres del mes + caja actual)
+  const cajas=[...cierres];
+  const cajaAct=DB.get('caja_actual'); if(cajaAct) cajas.push(cajaAct);
+  let gastos=0, nomina=0, retiros=0; const gastosPorConcepto={};
+  cajas.forEach(c=>{
+    const ref=c.cierre||c.apertura;
+    if(!ref || diaColombia(new Date(ref).getTime()).substring(0,7)!==mes) return;
+    (c.movimientos||[]).forEach(m=>{
+      if(m.tipo==='nomina'){ nomina+=m.monto; const k='Nómina'; gastosPorConcepto[k]=(gastosPorConcepto[k]||0)+m.monto; }
+      else if(m.tipo==='salida'||m.tipo==='gasto'){ gastos+=m.monto; const k=m.concepto||m.motivo||'Otros gastos'; gastosPorConcepto[k]=(gastosPorConcepto[k]||0)+m.monto; }
+      else if(m.tipo==='retiro'){ retiros+=m.monto; }
+    });
+  });
+  const totalEgresos=gastos+nomina+retiros;
+
+  // ── COSTO DE MATERIA PRIMA (si el inventario está al día; aquí 0 si no hay módulo)
+  const costoMateriaPrima=0;
+
+  // ── UTILIDAD estimada
+  const utilidad=totalVentas-totalEgresos-costoMateriaPrima;
+
+  // ── CIERRES del mes con su resultado
+  const cierresMes=cierres.filter(c=>c.cierre && diaColombia(new Date(c.cierre).getTime()).substring(0,7)===mes);
+  const sumaDiferencias=cierresMes.reduce((a,c)=>a+(c.diferencia||0),0);
+
+  // ── PRODUCTOS más vendidos del mes
+  const items={}; ventasMes.forEach(v=>v.items?.forEach(i=>{ if(!items[i.nombre])items[i.nombre]={qty:0,total:0}; items[i.nombre].qty+=i.qty; items[i.nombre].total+=i.precio*i.qty; }));
+  const topProductos=Object.entries(items).sort((a,b)=>b[1].qty-a[1].qty).slice(0,10);
+
+  // ── DÍAS de mayor venta
+  const porDia={}; ventasMes.forEach(v=>{ const d=diaColombia(new Date(v.fecha).getTime()); porDia[d]=(porDia[d]||0)+ventaComida(v); });
+  const topDias=Object.entries(porDia).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // ── Selector de meses (últimos 12)
+  const opcionesMes=[]; for(let i=0;i<12;i++){ const d=new Date(Date.UTC(anio,mesNum-1,1)); d.setUTCMonth(d.getUTCMonth()-i); const mk=d.toISOString().substring(0,7); const lbl=d.toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'}); opcionesMes.push(`<option value="${mk}" ${mk===mes?'selected':''}>${lbl}</option>`); }
+  const nombreMes=new Date(Date.UTC(anio,mesNum-1,1)).toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'});
+
+  // Guardar datos para exportar
+  window._contableData={mes,nombreMes,totalVentas,porMetodo,totalEgresos,gastos,nomina,retiros,gastosPorConcepto,utilidad,totalPropinas,totalDomicilios,totalRecargos,cierresMes,sumaDiferencias,topProductos,topDias,totalVentasPrev,pctVentas};
+
+  return `
+  <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
+    <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+      <div><div class="card-title" style="margin:0;">${ic('i-report')} Registro Contable Mensual</div>
+      <p class="text-xs text-gray" style="margin-top:4px;">Informe interno de gestión para el dueño. No es tributario ni tiene relación con la DIAN.</p></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <select onchange="_contableMes=this.value;showPage('contable')" style="width:auto;">${opcionesMes.join('')}</select>
+        <button class="btn btn-ghost btn-sm" onclick="exportarContableExcel()">${ic('i-download')} Excel</button>
+        <button class="btn btn-gold btn-sm" onclick="exportarContablePDF()">${ic('i-print')} PDF / Imprimir</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card green"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Ventas del mes (comida)</div><div class="stat-value">${fmtMoney(totalVentas)}</div><div class="stat-sub">${totalVentasPrev>0?(pctVentas>=0?'▲ +':'▼ ')+pctVentas+'% vs mes anterior':'sin comparativo'}</div></div>
+    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Egresos del mes</div><div class="stat-value">${fmtMoney(totalEgresos)}</div><div class="stat-sub">gastos + nómina + retiros</div></div>
+    <div class="stat-card gold"><div class="stat-icon">${ic('i-report')}</div><div class="stat-label">Utilidad estimada</div><div class="stat-value">${fmtMoney(utilidad)}</div><div class="stat-sub">ventas − egresos</div></div>
+    <div class="stat-card blue"><div class="stat-icon">${ic('i-history')}</div><div class="stat-label">Cierres del mes</div><div class="stat-value">${cierresMes.length}</div><div class="stat-sub">${sumaDiferencias===0?'sin descuadres':(sumaDiferencias>0?'sobró '+fmtMoney(sumaDiferencias):'faltó '+fmtMoney(Math.abs(sumaDiferencias)))}</div></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">${ic('i-cash')} Ventas por método de pago</div>
+      <div class="flex-between" style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Efectivo</span><strong class="text-green">${fmtMoney(porMetodo.efectivo)}</strong></div>
+      <div class="flex-between" style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Banco / Transferencia</span><strong style="color:var(--blue-l)">${fmtMoney(porMetodo.banco)}</strong></div>
+      <div class="flex-between" style="padding:8px 0;"><span>Tarjeta</span><strong class="text-gold">${fmtMoney(porMetodo.tarjeta)}</strong></div>
+      <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(212,175,55,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL VENTAS</span><strong class="text-gold">${fmtMoney(totalVentas)}</strong></div>
+    </div>
+    <div class="card">
+      <div class="card-title">${ic('i-cash')} Egresos por concepto</div>
+      ${Object.entries(gastosPorConcepto).length>0?Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join(''):'<p class="text-gray text-sm">Sin egresos registrados este mes.</p>'}
+      <div class="flex-between" style="padding:7px 0;"><span>Retiros</span><strong class="text-red">${fmtMoney(retiros)}</strong></div>
+      <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(192,57,43,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL EGRESOS</span><strong class="text-red">${fmtMoney(totalEgresos)}</strong></div>
+    </div>
+  </div>
+
+  <div class="card" style="border:1px solid rgba(230,126,34,0.2);background:rgba(230,126,34,0.04);">
+    <div class="card-title">${ic('i-users')} Dinero de terceros (NO es ingreso del negocio)</div>
+    <p class="text-xs text-gray mb-2">Estos valores se cobraron pero pertenecen a terceros. Se informan aparte, no suman a la utilidad.</p>
+    <div class="grid-3">
+      <div class="flex-between" style="padding:8px 0;"><span>Propinas (mesero)</span><strong>${fmtMoney(totalPropinas)}</strong></div>
+      <div class="flex-between" style="padding:8px 0;"><span>Domicilios</span><strong>${fmtMoney(totalDomicilios)}</strong></div>
+      <div class="flex-between" style="padding:8px 0;"><span>Recargos datáfono</span><strong>${fmtMoney(totalRecargos)}</strong></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">${ic('i-report')} Productos más vendidos</div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>Producto</th><th>Cant.</th><th>Total</th></tr></thead><tbody>
+      ${topProductos.length>0?topProductos.map(([n,d])=>`<tr><td>${escapeHtml(n)}</td><td class="font-bold">${d.qty}</td><td class="text-gold">${fmtMoney(d.total)}</td></tr>`).join(''):'<tr><td colspan="3" class="text-gray">Sin ventas este mes</td></tr>'}
+      </tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-title">${ic('i-history')} Días de mayor venta</div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>Día</th><th>Ventas</th></tr></thead><tbody>
+      ${topDias.length>0?topDias.map(([d,total])=>`<tr><td>${fmtDiaSolo(d+'T12:00:00Z')}</td><td class="text-gold font-bold">${fmtMoney(total)}</td></tr>`).join(''):'<tr><td colspan="2" class="text-gray">Sin ventas este mes</td></tr>'}
+      </tbody></table></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">${ic('i-history')} Cierres de caja del mes (control de descuadres)</div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Día</th><th>Cajero</th><th>Esperado</th><th>Contado</th><th>Resultado</th></tr></thead><tbody>
+    ${cierresMes.length>0?cierresMes.map(c=>{ const d=c.diferencia; const res=d===0?'<span class="badge badge-green">Cuadró</span>':d>0?`<span class="badge badge-blue">Sobró ${fmtMoney(d)}</span>`:`<span class="badge badge-red">Faltó ${fmtMoney(Math.abs(d))}</span>`; return `<tr><td>${fmtDiaSolo(c.cierre)}</td><td>${escapeHtml(c.cajero)}</td><td>${fmtMoney(c.esperadoEfectivo)}</td><td>${fmtMoney(c.contadoEfectivo)}</td><td>${res}</td></tr>`; }).join(''):'<tr><td colspan="5" class="text-gray">Sin cierres este mes</td></tr>'}
+    </tbody></table></div>
+    ${cierresMes.length>0?`<div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(212,175,55,0.2);margin-top:8px;font-size:15px;"><span class="font-bold">Suma de diferencias del mes</span><strong class="${sumaDiferencias===0?'text-green':sumaDiferencias>0?'text-gold':'text-red'}">${sumaDiferencias===0?'$ 0 (perfecto)':(sumaDiferencias>0?'Sobró '+fmtMoney(sumaDiferencias):'Faltó '+fmtMoney(Math.abs(sumaDiferencias)))}</strong></div>`:''}
+  </div>`;
+}
+// Exportar el informe contable a PDF (usa la impresión del navegador)
+function exportarContablePDF(){
+  const d=window._contableData; if(!d){ toast('Abra primero el informe','error'); return; }
+  const cfg=DB.get('config')||{};
+  const html=`<div style="font-family:'Inter',sans-serif;color:#000;max-width:800px;margin:0 auto;padding:20px;">
+    <h1 style="text-align:center;font-size:22px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</h1>
+    <h2 style="text-align:center;font-size:18px;border-bottom:2px solid #000;padding-bottom:8px;">Registro Contable — ${escapeHtml(d.nombreMes)}</h2>
+    <p style="text-align:center;font-size:11px;color:#555;">Informe interno de gestión. No es tributario ni tiene relación con la DIAN.</p>
+    <h3 style="font-size:15px;margin-top:16px;border-bottom:1px solid #999;">Resumen</h3>
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+      <tr><td style="padding:4px;">Ventas del mes (comida)</td><td style="text-align:right;font-weight:bold;">${fmtMoney(d.totalVentas)}</td></tr>
+      <tr><td style="padding:4px;">  · Efectivo</td><td style="text-align:right;">${fmtMoney(d.porMetodo.efectivo)}</td></tr>
+      <tr><td style="padding:4px;">  · Banco</td><td style="text-align:right;">${fmtMoney(d.porMetodo.banco)}</td></tr>
+      <tr><td style="padding:4px;">  · Tarjeta</td><td style="text-align:right;">${fmtMoney(d.porMetodo.tarjeta)}</td></tr>
+      <tr><td style="padding:4px;">Egresos del mes</td><td style="text-align:right;font-weight:bold;color:#a00;">-${fmtMoney(d.totalEgresos)}</td></tr>
+      <tr style="border-top:2px solid #000;"><td style="padding:6px 4px;font-weight:bold;font-size:15px;">UTILIDAD ESTIMADA</td><td style="text-align:right;font-weight:bold;font-size:15px;">${fmtMoney(d.utilidad)}</td></tr>
+    </table>
+    <h3 style="font-size:15px;margin-top:16px;border-bottom:1px solid #999;">Dinero de terceros (no es ingreso)</h3>
+    <table style="width:100%;font-size:13px;">
+      <tr><td style="padding:4px;">Propinas</td><td style="text-align:right;">${fmtMoney(d.totalPropinas)}</td></tr>
+      <tr><td style="padding:4px;">Domicilios</td><td style="text-align:right;">${fmtMoney(d.totalDomicilios)}</td></tr>
+      <tr><td style="padding:4px;">Recargos datáfono</td><td style="text-align:right;">${fmtMoney(d.totalRecargos)}</td></tr>
+    </table>
+    <h3 style="font-size:15px;margin-top:16px;border-bottom:1px solid #999;">Cierres del mes</h3>
+    <p style="font-size:13px;">Cierres: ${d.cierresMes.length} · Descuadres: ${d.sumaDiferencias===0?'ninguno':(d.sumaDiferencias>0?'sobró '+fmtMoney(d.sumaDiferencias):'faltó '+fmtMoney(Math.abs(d.sumaDiferencias)))}</p>
+    <h3 style="font-size:15px;margin-top:16px;border-bottom:1px solid #999;">Productos más vendidos</h3>
+    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+      ${d.topProductos.map(([n,x])=>`<tr><td style="padding:3px;">${escapeHtml(n)}</td><td style="text-align:right;">${x.qty}</td><td style="text-align:right;">${fmtMoney(x.total)}</td></tr>`).join('')}
+    </table>
+    <p style="text-align:center;font-size:10px;color:#888;margin-top:20px;">Generado el ${fmtDate(now())} · wallacecompany11@gmail.com</p>
+  </div>`;
+  const w=window.open('','_blank');
+  w.document.write('<html><head><title>Registro Contable '+d.nombreMes+'</title></head><body>'+html+'</body></html>');
+  w.document.close(); setTimeout(()=>w.print(),400);
+}
+// Exportar a Excel (CSV que Excel abre)
+function exportarContableExcel(){
+  const d=window._contableData; if(!d){ toast('Abra primero el informe','error'); return; }
+  let csv='Registro Contable,'+d.nombreMes+'\n\n';
+  csv+='VENTAS DEL MES (comida)\n';
+  csv+='Efectivo,'+d.porMetodo.efectivo+'\nBanco,'+d.porMetodo.banco+'\nTarjeta,'+d.porMetodo.tarjeta+'\nTOTAL VENTAS,'+d.totalVentas+'\n\n';
+  csv+='EGRESOS\n';
+  Object.entries(d.gastosPorConcepto).forEach(([k,v])=>{ csv+='"'+k+'",'+v+'\n'; });
+  csv+='Retiros,'+d.retiros+'\nTOTAL EGRESOS,'+d.totalEgresos+'\n\n';
+  csv+='UTILIDAD ESTIMADA,'+d.utilidad+'\n\n';
+  csv+='DINERO DE TERCEROS (no es ingreso)\n';
+  csv+='Propinas,'+d.totalPropinas+'\nDomicilios,'+d.totalDomicilios+'\nRecargos datafono,'+d.totalRecargos+'\n\n';
+  csv+='PRODUCTOS MAS VENDIDOS\nProducto,Cantidad,Total\n';
+  d.topProductos.forEach(([n,x])=>{ csv+='"'+n+'",'+x.qty+','+x.total+'\n'; });
+  csv+='\nCIERRES DEL MES\nDia,Cajero,Esperado,Contado,Diferencia\n';
+  d.cierresMes.forEach(c=>{ csv+=fmtDiaSolo(c.cierre)+',"'+c.cajero+'",'+c.esperadoEfectivo+','+c.contadoEfectivo+','+(c.diferencia||0)+'\n'; });
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download='registro-contable-'+d.mes+'.csv'; a.click();
+  URL.revokeObjectURL(url);
+  toast('Informe exportado a Excel','success');
+}
 function reportes(){
   const vs=DB.get('ventas')||[]; const t=today();
   const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v)); const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
