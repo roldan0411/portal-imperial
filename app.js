@@ -180,6 +180,7 @@ function initData(){
   if(!DB.get('ventas')) DB.set('ventas',[]);
   if(!DB.get('clientes')) DB.set('clientes',[]);
   if(!DB.get('cierres')) DB.set('cierres',[]);
+  if(!DB.get('gastos_negocio')) DB.set('gastos_negocio',[]);
   // Limpieza mensual: conservar cierres del mes actual y el anterior; borrar más viejos.
   (function(){
     const cs=DB.get('cierres')||[]; if(cs.length===0) return;
@@ -343,6 +344,7 @@ const NAV = [
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor','jefe']},
   {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe']},
   {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin']},
+  {id:'gastosneg',icon:'i-cash',label:'Gastos del Negocio',roles:['admin','jefe']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
   {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe']},
   {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor','jefe']},
@@ -379,7 +381,7 @@ const PAGE_META={
   dashboard:['i-dashboard','Dashboard'], ventas:['i-cart','Nueva Venta'], pedidos:['i-orders','Pedidos'],
   listos:['i-ready','Pedidos Listos'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
-  reportes:['i-report','Reportes'], contable:['i-report','Registro Contable Mensual'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
+  reportes:['i-report','Reportes'], contable:['i-report','Registro Contable Mensual'], gastosneg:['i-cash','Gastos del Negocio'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
   asistencia:['i-clock','Control de Asistencia'],
   tiempos:['i-clock','Tiempos de Entrega'],
   impresiones:['i-orders','Impresiones']
@@ -391,7 +393,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,contable,auditoria,menu,config,asistencia,tiempos,impresiones};
+  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,contable,gastosneg,auditoria,menu,config,asistencia,tiempos,impresiones};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -1943,6 +1945,122 @@ function renderHistTable(vs){
 }
 
 // ========================= REPORTES =========================
+// ========================= GASTOS DEL NEGOCIO =========================
+// Gastos que el jefe paga de su cuenta o del dinero que saca DESPUÉS de cerrar caja
+// (arriendo, recibos, materia prima, etc.). NO salen de la caja diaria: son aparte.
+// Se guardan con concepto, número de factura, fecha y valor, agrupados por mes.
+let _gastosNegMes = null; // 'YYYY-MM'; null = mes actual
+function gastosneg(){
+  if(!['admin','jefe'].includes(STATE.user.rol)){ return '<div class="card"><p class="text-gray">No autorizado.</p></div>'; }
+  const gastos=DB.get('gastos_negocio')||[];
+  const mesActual=diaColombia().substring(0,7);
+  const mes=_gastosNegMes||mesActual;
+  const [anio,mesNum]=mes.split('-').map(Number);
+  // Filtrar los del mes seleccionado (por la fecha del gasto)
+  const delMes=gastos.filter(g=>{ const f=(g.fecha||g.creado||'').substring(0,7); return f===mes; })
+    .sort((a,b)=>new Date(b.fecha||b.creado)-new Date(a.fecha||a.creado));
+  const totalMes=delMes.reduce((a,g)=>a+(g.valor||0),0);
+  // Agrupar por concepto
+  const porConcepto={}; delMes.forEach(g=>{ const k=g.concepto||'Otros'; porConcepto[k]=(porConcepto[k]||0)+(g.valor||0); });
+  // Selector de meses
+  const opcionesMes=[]; for(let i=0;i<12;i++){ const d=new Date(Date.UTC(anio,mesNum-1,1)); d.setUTCMonth(d.getUTCMonth()-i); const mk=d.toISOString().substring(0,7); const lbl=d.toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'}); opcionesMes.push(`<option value="${mk}" ${mk===mes?'selected':''}>${lbl}</option>`); }
+  const hoy=diaColombia();
+
+  return `
+  <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
+    <div class="card-title" style="margin:0;">${ic('i-cash')} Gastos del Negocio</div>
+    <p class="text-xs text-gray" style="margin-top:4px;">Gastos que se pagan de la cuenta del negocio o del dinero que se retira después de cerrar caja (arriendo, recibos, materia prima, etc.). Son APARTE de la caja diaria. Se guardan por mes.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">${ic('i-plus')} Registrar nuevo gasto</div>
+      <div class="form-group"><label>Concepto *</label>
+        <input type="text" id="gn-concepto" placeholder="Ej: Arriendo, Recibo de luz, Materia prima..." list="gn-conceptos-list">
+        <datalist id="gn-conceptos-list">
+          <option value="Arriendo"><option value="Servicios públicos"><option value="Recibo de luz"><option value="Recibo de agua"><option value="Recibo de gas"><option value="Internet/Teléfono"><option value="Materia prima"><option value="Insumos"><option value="Nómina"><option value="Mantenimiento"><option value="Impuestos"><option value="Publicidad"><option value="Otros">
+        </datalist>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group"><label>Valor *</label><input type="number" inputmode="numeric" id="gn-valor" placeholder="0" oninput="document.getElementById('gn-valor-prev').textContent=this.value?fmtMoney(parseFloat(this.value)):''"><div class="text-xs text-gold" id="gn-valor-prev" style="margin-top:2px;"></div></div>
+        <div class="form-group"><label>Fecha *</label><input type="date" id="gn-fecha" value="${hoy}"></div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group"><label>N° Factura (opcional)</label><input type="text" id="gn-factura" placeholder="Ej: F-00123"></div>
+        <div class="form-group"><label>Pagado con</label><select id="gn-metodo"><option value="efectivo">Efectivo (retiro de caja)</option><option value="cuenta">Cuenta / transferencia</option><option value="tarjeta">Tarjeta</option></select></div>
+      </div>
+      <div class="form-group"><label>Nota (opcional)</label><input type="text" id="gn-nota" placeholder="Detalle adicional..."></div>
+      <button class="btn btn-gold" style="width:100%;" onclick="guardarGastoNegocio()">${ic('i-check')} Guardar gasto</button>
+    </div>
+
+    <div class="card">
+      <div class="flex-between">
+        <div class="card-title" style="margin:0;">${ic('i-report')} Resumen del mes</div>
+        <select onchange="_gastosNegMes=this.value;showPage('gastosneg')" style="width:auto;">${opcionesMes.join('')}</select>
+      </div>
+      <div class="stat-card red" style="margin:12px 0;">
+        <div class="stat-label">Total gastos del negocio</div>
+        <div class="stat-value">${fmtMoney(totalMes)}</div>
+        <div class="stat-sub">${delMes.length} gasto(s) este mes</div>
+      </div>
+      <div class="card-title" style="font-size:11px;">Por concepto</div>
+      ${Object.entries(porConcepto).length>0?Object.entries(porConcepto).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="flex-between" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(v)}</strong></div>`).join(''):'<p class="text-gray text-sm">Sin gastos este mes.</p>'}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="flex-between mb-2">
+      <div class="card-title" style="margin:0;">${ic('i-history')} Gastos registrados</div>
+      <button class="btn btn-ghost btn-sm" onclick="exportarGastosNegExcel()">${ic('i-download')} Exportar Excel</button>
+    </div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Fecha</th><th>Concepto</th><th>N° Factura</th><th>Pagado con</th><th>Valor</th><th></th></tr></thead><tbody>
+    ${delMes.length>0?delMes.map(g=>`<tr>
+      <td>${fmtDiaSolo((g.fecha||g.creado)+'T12:00:00Z')}</td>
+      <td class="font-bold">${escapeHtml(g.concepto||'')}</td>
+      <td class="text-gray">${g.factura?escapeHtml(g.factura):'—'}</td>
+      <td class="text-xs">${g.metodo==='efectivo'?'Efectivo':g.metodo==='cuenta'?'Cuenta':'Tarjeta'}</td>
+      <td class="text-red font-bold">${fmtMoney(g.valor)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="eliminarGastoNegocio('${g.id}')" title="Eliminar">${ic('i-close')}</button></td>
+    </tr>${g.nota?`<tr><td></td><td colspan="5" class="text-xs text-gray">↳ ${escapeHtml(g.nota)}</td></tr>`:''}`).join(''):'<tr><td colspan="6" class="text-gray">Sin gastos registrados este mes</td></tr>'}
+    </tbody></table></div>
+  </div>`;
+}
+function guardarGastoNegocio(){
+  const concepto=document.getElementById('gn-concepto')?.value.trim();
+  const valor=parseFloat(document.getElementById('gn-valor')?.value)||0;
+  const fecha=document.getElementById('gn-fecha')?.value;
+  const factura=document.getElementById('gn-factura')?.value.trim();
+  const metodo=document.getElementById('gn-metodo')?.value||'efectivo';
+  const nota=document.getElementById('gn-nota')?.value.trim();
+  if(!concepto){ toast('Escriba el concepto del gasto','error'); return; }
+  if(valor<=0){ toast('Escriba un valor válido','error'); return; }
+  if(!fecha){ toast('Seleccione la fecha','error'); return; }
+  const gastos=DB.get('gastos_negocio')||[];
+  gastos.unshift({ id:uid(), concepto, valor, fecha, factura:factura||'', metodo, nota:nota||'', registradoPor:STATE.user.nombre, creado:now() });
+  DB.set('gastos_negocio',gastos);
+  toast('Gasto registrado: '+fmtMoney(valor),'success');
+  showPage('gastosneg');
+}
+function eliminarGastoNegocio(id){
+  if(!confirm('¿Eliminar este gasto?')) return;
+  const gastos=(DB.get('gastos_negocio')||[]).filter(g=>g.id!==id);
+  DB.set('gastos_negocio',gastos);
+  toast('Gasto eliminado','info');
+  showPage('gastosneg');
+}
+function exportarGastosNegExcel(){
+  const gastos=DB.get('gastos_negocio')||[];
+  const mes=_gastosNegMes||diaColombia().substring(0,7);
+  const delMes=gastos.filter(g=>(g.fecha||g.creado||'').substring(0,7)===mes);
+  if(delMes.length===0){ toast('No hay gastos este mes','error'); return; }
+  let csv='Gastos del Negocio,'+mes+'\n\nFecha,Concepto,N Factura,Pagado con,Valor,Nota\n';
+  delMes.forEach(g=>{ csv+=(g.fecha||'')+',"'+(g.concepto||'')+'","'+(g.factura||'')+'","'+(g.metodo||'')+'",'+(g.valor||0)+',"'+(g.nota||'')+'"\n'; });
+  csv+='\nTOTAL,,,,'+delMes.reduce((a,g)=>a+(g.valor||0),0)+'\n';
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download='gastos-negocio-'+mes+'.csv'; a.click(); URL.revokeObjectURL(url);
+  toast('Gastos exportados','success');
+}
 // ========================= REGISTRO CONTABLE MENSUAL =========================
 // Informe interno de gestión para el dueño (NO es tributario, NO tiene que ver con la DIAN).
 let _contableMes = null; // 'YYYY-MM' seleccionado; null = mes actual
@@ -1990,12 +2108,26 @@ function contable(){
       else if(m.tipo==='retiro'){ retiros+=m.monto; }
     });
   });
-  const totalEgresos=gastos+nomina+retiros;
+  // GASTOS reales de caja (sin retiros): estos SÍ son costo, reducen la ganancia.
+  const gastosCaja=gastos+nomina;
+
+  // ── GASTOS DEL NEGOCIO (aparte de la caja: arriendo, recibos, materia prima, etc.)
+  // Estos los paga el jefe de su cuenta o del dinero que retira después de cerrar caja.
+  const gastosNeg=(DB.get('gastos_negocio')||[]).filter(g=>(g.fecha||g.creado||'').substring(0,7)===mes);
+  const totalGastosNeg=gastosNeg.reduce((a,g)=>a+(g.valor||0),0);
+  const gastosNegPorConcepto={};
+  gastosNeg.forEach(g=>{ const k=g.concepto||'Otros'; gastosNegPorConcepto[k]=(gastosNegPorConcepto[k]||0)+(g.valor||0); });
+
+  // GASTOS TOTALES (lo que de verdad se gastó) = gastos de caja + gastos del negocio.
+  // Los RETIROS NO son gasto: son dinero que el jefe saca (sigue siendo del negocio).
+  const totalEgresos=gastosCaja+totalGastosNeg;
+  // Retiros: se muestran aparte como SALIDA DE EFECTIVO (no reduce la utilidad).
+  const totalSalidasEfectivo=retiros;
 
   // ── COSTO DE MATERIA PRIMA (si el inventario está al día; aquí 0 si no hay módulo)
   const costoMateriaPrima=0;
 
-  // ── UTILIDAD estimada
+  // ── UTILIDAD estimada = ventas − gastos reales − materia prima (SIN restar los retiros)
   const utilidad=totalVentas-totalEgresos-costoMateriaPrima;
 
   // ── CIERRES del mes con su resultado
@@ -2015,7 +2147,7 @@ function contable(){
   const nombreMes=new Date(Date.UTC(anio,mesNum-1,1)).toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'});
 
   // Guardar datos para exportar
-  window._contableData={mes,nombreMes,totalVentas,porMetodo,totalEgresos,gastos,nomina,retiros,gastosPorConcepto,utilidad,totalPropinas,totalDomicilios,totalRecargos,cierresMes,sumaDiferencias,topProductos,topDias,totalVentasPrev,pctVentas};
+  window._contableData={mes,nombreMes,totalVentas,porMetodo,totalEgresos,gastosCaja,gastos,nomina,retiros,totalSalidasEfectivo,gastosPorConcepto,totalGastosNeg,gastosNegPorConcepto,gastosNeg,utilidad,totalPropinas,totalDomicilios,totalRecargos,cierresMes,sumaDiferencias,topProductos,topDias,totalVentasPrev,pctVentas};
 
   return `
   <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
@@ -2032,7 +2164,7 @@ function contable(){
 
   <div class="stats-grid">
     <div class="stat-card green"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Ventas del mes (comida)</div><div class="stat-value">${fmtMoney(totalVentas)}</div><div class="stat-sub">${totalVentasPrev>0?(pctVentas>=0?'▲ +':'▼ ')+pctVentas+'% vs mes anterior':'sin comparativo'}</div></div>
-    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Egresos del mes</div><div class="stat-value">${fmtMoney(totalEgresos)}</div><div class="stat-sub">gastos + nómina + retiros</div></div>
+    <div class="stat-card red"><div class="stat-icon">${ic('i-cash')}</div><div class="stat-label">Gastos del mes</div><div class="stat-value">${fmtMoney(totalEgresos)}</div><div class="stat-sub">gastos caja + negocio (sin retiros)</div></div>
     <div class="stat-card gold"><div class="stat-icon">${ic('i-report')}</div><div class="stat-label">Utilidad estimada</div><div class="stat-value">${fmtMoney(utilidad)}</div><div class="stat-sub">ventas − egresos</div></div>
     <div class="stat-card blue"><div class="stat-icon">${ic('i-history')}</div><div class="stat-label">Cierres del mes</div><div class="stat-value">${cierresMes.length}</div><div class="stat-sub">${sumaDiferencias===0?'sin descuadres':(sumaDiferencias>0?'sobró '+fmtMoney(sumaDiferencias):'faltó '+fmtMoney(Math.abs(sumaDiferencias)))}</div></div>
   </div>
@@ -2046,10 +2178,12 @@ function contable(){
       <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(212,175,55,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL VENTAS</span><strong class="text-gold">${fmtMoney(totalVentas)}</strong></div>
     </div>
     <div class="card">
-      <div class="card-title">${ic('i-cash')} Egresos por concepto</div>
-      ${Object.entries(gastosPorConcepto).length>0?Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join(''):'<p class="text-gray text-sm">Sin egresos registrados este mes.</p>'}
-      <div class="flex-between" style="padding:7px 0;"><span>Retiros</span><strong class="text-red">${fmtMoney(retiros)}</strong></div>
-      <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(192,57,43,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL EGRESOS</span><strong class="text-red">${fmtMoney(totalEgresos)}</strong></div>
+      <div class="card-title">${ic('i-cash')} Egresos por concepto (lo que se gastó)</div>
+      <div class="text-xs text-gray" style="margin-bottom:4px;">De la caja diaria:</div>
+      ${Object.entries(gastosPorConcepto).length>0?Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join(''):'<p class="text-gray text-xs">Sin gastos de caja este mes.</p>'}
+      ${Object.entries(gastosNegPorConcepto).length>0?`<div class="text-xs text-gray" style="margin:8px 0 4px;">Gastos del negocio (arriendo, recibos, etc.):</div>${Object.entries(gastosNegPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join('')}`:''}
+      <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(192,57,43,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL GASTOS</span><strong class="text-red">${fmtMoney(totalEgresos)}</strong></div>
+      ${totalSalidasEfectivo>0?`<div class="flex-between" style="padding:10px 0;border-top:1px dashed rgba(255,255,255,0.15);margin-top:8px;"><span>${ic('i-cash')} Salida de efectivo (retiros del jefe)</span><strong style="color:var(--blue-l)">${fmtMoney(totalSalidasEfectivo)}</strong></div><p class="text-xs text-gray">Esto NO es un gasto: es dinero que el jefe sacó de la caja. Sigue siendo del negocio, no reduce la ganancia.</p>`:''}
     </div>
   </div>
 
@@ -2100,8 +2234,11 @@ function exportarContablePDF(){
       <tr><td style="padding:4px;">  · Efectivo</td><td style="text-align:right;">${fmtMoney(d.porMetodo.efectivo)}</td></tr>
       <tr><td style="padding:4px;">  · Banco</td><td style="text-align:right;">${fmtMoney(d.porMetodo.banco)}</td></tr>
       <tr><td style="padding:4px;">  · Tarjeta</td><td style="text-align:right;">${fmtMoney(d.porMetodo.tarjeta)}</td></tr>
-      <tr><td style="padding:4px;">Egresos del mes</td><td style="text-align:right;font-weight:bold;color:#a00;">-${fmtMoney(d.totalEgresos)}</td></tr>
+      <tr><td style="padding:4px;">Gastos de caja</td><td style="text-align:right;">-${fmtMoney(d.gastosCaja)}</td></tr>
+      <tr><td style="padding:4px;">Gastos del negocio (arriendo, recibos...)</td><td style="text-align:right;">-${fmtMoney(d.totalGastosNeg)}</td></tr>
+      <tr><td style="padding:4px;font-weight:bold;">Total gastos del mes</td><td style="text-align:right;font-weight:bold;color:#a00;">-${fmtMoney(d.totalEgresos)}</td></tr>
       <tr style="border-top:2px solid #000;"><td style="padding:6px 4px;font-weight:bold;font-size:15px;">UTILIDAD ESTIMADA</td><td style="text-align:right;font-weight:bold;font-size:15px;">${fmtMoney(d.utilidad)}</td></tr>
+      ${d.totalSalidasEfectivo>0?`<tr><td style="padding:4px;color:#555;">Salida de efectivo (retiros del jefe, no es gasto)</td><td style="text-align:right;color:#555;">${fmtMoney(d.totalSalidasEfectivo)}</td></tr>`:''}
     </table>
     <h3 style="font-size:15px;margin-top:16px;border-bottom:1px solid #999;">Dinero de terceros (no es ingreso)</h3>
     <table style="width:100%;font-size:13px;">
@@ -2127,10 +2264,13 @@ function exportarContableExcel(){
   let csv='Registro Contable,'+d.nombreMes+'\n\n';
   csv+='VENTAS DEL MES (comida)\n';
   csv+='Efectivo,'+d.porMetodo.efectivo+'\nBanco,'+d.porMetodo.banco+'\nTarjeta,'+d.porMetodo.tarjeta+'\nTOTAL VENTAS,'+d.totalVentas+'\n\n';
-  csv+='EGRESOS\n';
+  csv+='GASTOS DE CAJA\n';
   Object.entries(d.gastosPorConcepto).forEach(([k,v])=>{ csv+='"'+k+'",'+v+'\n'; });
-  csv+='Retiros,'+d.retiros+'\nTOTAL EGRESOS,'+d.totalEgresos+'\n\n';
-  csv+='UTILIDAD ESTIMADA,'+d.utilidad+'\n\n';
+  csv+='\nGASTOS DEL NEGOCIO (arriendo, recibos, etc.)\n';
+  Object.entries(d.gastosNegPorConcepto).forEach(([k,v])=>{ csv+='"'+k+'",'+v+'\n'; });
+  csv+='TOTAL GASTOS,'+d.totalEgresos+'\n\n';
+  csv+='UTILIDAD ESTIMADA,'+d.utilidad+'\n';
+  csv+='Salida de efectivo (retiros del jefe - no es gasto),'+d.totalSalidasEfectivo+'\n\n';
   csv+='DINERO DE TERCEROS (no es ingreso)\n';
   csv+='Propinas,'+d.totalPropinas+'\nDomicilios,'+d.totalDomicilios+'\nRecargos datafono,'+d.totalRecargos+'\n\n';
   csv+='PRODUCTOS MAS VENDIDOS\nProducto,Cantidad,Total\n';
@@ -2934,7 +3074,7 @@ document.addEventListener('touchstart',()=>lastAct=Date.now());
 setInterval(()=>{ if(STATE.user && Date.now()-lastAct>30*60*1000){ toast('Sesión cerrada por inactividad'); doLogout(); }},60000);
 
 // ========================= BOOT con FIREBASE =========================
-const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones'];
+const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones','gastos_negocio'];
 
 function showConexion(estado){
   let el=document.getElementById('fb-status');
