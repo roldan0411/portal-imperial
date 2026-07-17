@@ -904,42 +904,42 @@ function facturaHTML(v){
   const totalItems = v.items.reduce((a,i)=>a+i.qty,0);
   const numDoc = v.factura || (esDom?('DOM-'+String(v.id||'').slice(-6)):'—');
   return `
-  <div style="font-family:'Inter',sans-serif;color:#000;font-weight:600;-webkit-font-smoothing:none;">
+  <div style="font-family:'Inter',sans-serif;color:#000;font-weight:400;-webkit-font-smoothing:none;">
     <div style="text-align:center;padding-bottom:6px;">
       ${cfg.logo?`<img src="${cfg.logo}" style="max-height:135px;max-width:260px;margin-bottom:6px;">`:''}
       <div style="font-size:30px;font-weight:800;letter-spacing:0.5px;color:#000;line-height:1;">Portal Imperial</div>
       <div style="font-size:16px;font-style:italic;font-family:Georgia,'Times New Roman',serif;color:#000;margin-top:4px;font-weight:700;">Exquisita Comida Típica China</div>
-      <div style="font-size:14px;margin-top:8px;line-height:1.6;color:#000;font-weight:600;">
+      <div style="font-size:15px;margin-top:8px;line-height:1.6;color:#000;">
         ${cfg.nit?'NIT: '+escapeHtml(cfg.nit)+'<br>':''}${cfg.dir?escapeHtml(cfg.dir)+'<br>':''}${cfg.tel?'Tel: '+escapeHtml(cfg.tel):''}
       </div>
     </div>
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:8px 0;text-align:center;margin:6px 0;">
-      <div style="font-size:14px;letter-spacing:2px;color:#000;font-weight:600;">${esDom?'PEDIDO A DOMICILIO':'FACTURA DE VENTA'}</div>
+      <div style="font-size:15px;letter-spacing:2px;color:#000;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA DE VENTA'}</div>
       <div style="font-size:21px;font-weight:800;letter-spacing:1px;margin-top:3px;">N° ${escapeHtml(String(numDoc))}</div>
     </div>
-    <div style="font-size:16px;line-height:1.9;margin:8px 0;color:#000;font-weight:700;">
-      <div style="display:flex;justify-content:space-between;"><span>Fecha</span><span style="font-weight:700;">${fmtDate(v.fechaCobro||v.fecha)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Atención</span><span style="font-weight:700;">${tipoLabel(v.tipo)}${v.mesa?' · '+escapeHtml(v.mesa):''}</span></div>
-      ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente</span><span style="font-weight:700;">${escapeHtml(v.cliNombre)}</span></div>`:''}
-      ${v.cliTel?`<div style="display:flex;justify-content:space-between;"><span>Teléfono</span><span style="font-weight:700;">${escapeHtml(v.cliTel)}</span></div>`:''}
-      ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección</span><span style="font-weight:700;text-align:right;max-width:60%;">${escapeHtml(v.cliDir)}</span></div>`:''}
-      ${esDom&&v.cliBarrio?`<div style="display:flex;justify-content:space-between;"><span>Barrio</span><span style="font-weight:700;">${escapeHtml(v.cliBarrio)}</span></div>`:''}
-      ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero</span><span style="font-weight:700;">${escapeHtml(v.domiciliario)}</span></div>`:''}
-      <div style="display:flex;justify-content:space-between;"><span>Atendió</span><span style="font-weight:700;">${escapeHtml(v.atendidoPor||v.mesero||v.cajero||'')}</span></div>
-      ${v.cobradoPor && v.cobradoPor!==(v.atendidoPor||v.mesero||v.cajero)?`<div style="display:flex;justify-content:space-between;"><span>Cobró</span><span style="font-weight:700;">${escapeHtml(v.cobradoPor)}</span></div>`:''}
+    <div style="font-size:16px;line-height:1.9;margin:8px 0;color:#000;">
+      <div style="display:flex;justify-content:space-between;"><span>Fecha</span><span>${fmtDate(v.fechaCobro||v.fecha)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Atención</span><span>${tipoLabel(v.tipo)}${v.mesa?' · '+escapeHtml(v.mesa):''}</span></div>
+      ${v.cliNombre?`<div style="display:flex;justify-content:space-between;"><span>Cliente</span><span>${escapeHtml(v.cliNombre)}</span></div>`:''}
+      ${v.cliTel?`<div style="display:flex;justify-content:space-between;"><span>Teléfono</span><span>${escapeHtml(v.cliTel)}</span></div>`:''}
+      ${esDom&&v.cliDir?`<div style="display:flex;justify-content:space-between;"><span>Dirección</span><span style="text-align:right;max-width:60%;">${escapeHtml(v.cliDir)}</span></div>`:''}
+      ${esDom&&v.cliBarrio?`<div style="display:flex;justify-content:space-between;"><span>Barrio</span><span>${escapeHtml(v.cliBarrio)}</span></div>`:''}
+      ${esDom&&v.domiciliario?`<div style="display:flex;justify-content:space-between;"><span>Mensajero</span><span>${escapeHtml(v.domiciliario)}</span></div>`:''}
+      <div style="display:flex;justify-content:space-between;"><span>Atendió</span><span>${escapeHtml(v.atendidoPor||v.mesero||v.cajero||'')}</span></div>
+      ${v.cobradoPor && v.cobradoPor!==(v.atendidoPor||v.mesero||v.cajero)?`<div style="display:flex;justify-content:space-between;"><span>Cobró</span><span>${escapeHtml(v.cobradoPor)}</span></div>`:''}
     </div>
     <div style="border-top:1.5px solid #000;padding-top:6px;">
       <div style="display:flex;font-size:14px;font-weight:bold;letter-spacing:0.5px;border-bottom:1px solid #000;padding-bottom:5px;margin-bottom:6px;color:#000;">
         <span style="width:38px;">CANT</span><span style="flex:1;">DESCRIPCIÓN</span><span style="width:80px;text-align:right;">VALOR</span>
       </div>
-      ${v.items.map(i=>`<div style="display:flex;font-size:16px;padding:5px 0;line-height:1.35;border-bottom:1px dotted #999;font-weight:700;">
-        <span style="width:38px;font-weight:800;">${i.qty}</span>
-        <span style="flex:1;padding-right:6px;">${escapeHtml(i.nombre)}${i.qty>1?`<br><span style="font-size:12px;color:#000;">${fmtMoney(i.precio)} c/u</span>`:''}</span>
-        <span style="width:80px;text-align:right;font-weight:700;">${fmtMoney(i.precio*i.qty)}</span>
+      ${v.items.map(i=>`<div style="display:flex;font-size:16px;padding:5px 0;line-height:1.35;border-bottom:1px dotted #999;">
+        <span style="width:38px;">${i.qty}</span>
+        <span style="flex:1;padding-right:6px;">${escapeHtml(i.nombre)}${i.qty>1?`<br><span style="font-size:13px;color:#000;">${fmtMoney(i.precio)} c/u</span>`:''}</span>
+        <span style="width:80px;text-align:right;">${fmtMoney(i.precio*i.qty)}</span>
       </div>`).join('')}
-      <div style="font-size:14px;color:#000;text-align:right;margin-top:5px;font-weight:700;">${totalItems} artículo(s)</div>
+      <div style="font-size:14px;color:#000;text-align:right;margin-top:5px;">${totalItems} artículo(s)</div>
     </div>
-    <div style="margin-top:8px;padding-top:6px;font-size:16px;font-weight:700;">
+    <div style="margin-top:8px;padding-top:6px;font-size:16px;">
       <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
       ${v.descuento>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
       ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
@@ -949,13 +949,13 @@ function facturaHTML(v){
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:10px 0;display:flex;justify-content:space-between;align-items:center;">
       <span style="font-size:19px;font-weight:800;letter-spacing:1px;">TOTAL</span><span style="font-size:25px;font-weight:800;">${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
     </div>
-    <div style="text-align:center;font-size:15px;margin-top:7px;color:#000;font-weight:600;">Forma de pago: <strong>${nombreMetodo(v.metodo).toUpperCase()}</strong></div>
-    ${v.obs?`<div style="border-top:1px dashed #000;margin-top:8px;padding-top:6px;font-size:14px;font-weight:600;"><strong>Observación:</strong> ${escapeHtml(v.obs)}</div>`:''}
-    <div style="text-align:center;margin-top:14px;font-size:16px;font-weight:800;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
-    <div style="text-align:center;font-size:14px;color:#000;margin-top:4px;font-style:italic;font-weight:600;">Vuelva pronto, será un placer atenderle</div>
+    <div style="text-align:center;font-size:15px;margin-top:7px;color:#000;">Forma de pago: <strong>${nombreMetodo(v.metodo).toUpperCase()}</strong></div>
+    ${v.obs?`<div style="border-top:1px dashed #000;margin-top:8px;padding-top:6px;font-size:15px;"><strong>Observación:</strong> ${escapeHtml(v.obs)}</div>`:''}
+    <div style="text-align:center;margin-top:14px;font-size:17px;font-weight:800;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
+    <div style="text-align:center;font-size:15px;color:#000;margin-top:4px;font-style:italic;">Vuelva pronto, será un placer atenderle</div>
     <div style="text-align:center;font-size:16px;margin-top:8px;letter-spacing:4px;color:#c0392b;">★ ★ ★</div>
     ${(cfg.marcaAguaActiva&&cfg.marcaAgua)?`<div style="text-align:center;font-size:15px;color:#000;margin-top:12px;letter-spacing:1px;border-top:2px dotted #000;padding-top:10px;font-weight:bold;">${escapeHtml(cfg.marcaAgua)}</div>`:''}
-    <div style="text-align:center;font-size:13px;color:#000;margin-top:10px;line-height:1.6;border-top:1px dashed #000;padding-top:8px;font-weight:600;">
+    <div style="text-align:center;font-size:13px;color:#000;margin-top:10px;line-height:1.6;border-top:1px dashed #000;padding-top:8px;">
       Software administrativo por WALLACE COMPANY SYSTEM<br>wallacecompany11@gmail.com
     </div>
   </div>`;
