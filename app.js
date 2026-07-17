@@ -162,6 +162,7 @@ function initData(){
     {id:'u4',nombre:'Biometría',usuario:'biometria',pass:'biometria123',rol:'biometria',activo:true,creado:now()},
     {id:'u5',nombre:'Impresiones',usuario:'impresiones',pass:'impresiones123',rol:'impresiones',activo:true,creado:now()},
     {id:'u6',nombre:'Jefe',usuario:'jefe',pass:'jefe123',rol:'jefe',activo:true,creado:now()},
+    {id:'u7',nombre:'Dueño',usuario:'dueno',pass:'dueno123',rol:'dueño',activo:true,creado:now()},
   ]);
   if(!DB.get('productos')) DB.set('productos',[
     {id:'p1',nombre:'Rollos Primavera',precio:10000,cat:'Entremeses',activo:true},
@@ -212,6 +213,9 @@ function initData(){
     const jefe=us.find(u=>u.usuario==='jefe');
     if(!jefe){ us.push({id:uid(),nombre:'Jefe',usuario:'jefe',pass:'jefe123',rol:'jefe',activo:true,creado:now()}); ch=true; }
     else if(jefe.rol!=='jefe'){ jefe.rol='jefe'; ch=true; }
+    const dueno=us.find(u=>u.usuario==='dueno');
+    if(!dueno){ us.push({id:uid(),nombre:'Dueño',usuario:'dueno',pass:'dueno123',rol:'dueño',activo:true,creado:now()}); ch=true; }
+    else if(dueno.rol!=='dueño'){ dueno.rol='dueño'; ch=true; }
     if(ch) DB.set('usuarios',us);
   })();
   if(!DB.get('config')) DB.set('config',{
@@ -329,25 +333,25 @@ function registrarMarcacion(emp,tipo){
 // ========================= SIDEBAR =========================
 const NAV = [
   {sec:'Principal'},
-  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor','jefe']},
+  {id:'dashboard',icon:'i-dashboard',label:'Dashboard',roles:['admin','supervisor','jefe','dueño']},
   {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero','jefe']},
-  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones','jefe'],badge:'activos'},
+  {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones','jefe','dueño'],badge:'activos'},
   {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero','jefe'],badge:'listos'},
   {sec:'Operaciones'},
-  {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor','jefe']},
+  {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor','jefe','dueño']},
   {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero','jefe']},
-  {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor','jefe'],badge:'cocina'},
-  {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina','jefe']},
+  {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor','jefe','dueño'],badge:'cocina'},
+  {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina','jefe','dueño']},
   {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor','impresiones','jefe']},
   {sec:'Gestión'},
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor','jefe']},
-  {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe']},
-  {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin']},
-  {id:'gastosneg',icon:'i-cash',label:'Gastos del Negocio',roles:['admin','jefe']},
+  {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe','dueño']},
+  {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin','dueño']},
+  {id:'gastosneg',icon:'i-cash',label:'Gastos del Negocio',roles:['admin','jefe','dueño']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
-  {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe']},
-  {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor','jefe']},
+  {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe','dueño']},
+  {id:'menu',icon:'i-menu-food',label:'Menú',roles:['admin','supervisor','jefe','dueño']},
   {id:'config',icon:'i-settings',label:'Configuración',roles:['admin']},
 ];
 function buildSidebar(){
@@ -901,8 +905,8 @@ function facturaHTML(v){
   <div style="font-family:'Inter',sans-serif;color:#000;">
     <div style="text-align:center;padding-bottom:8px;">
       ${cfg.logo?`<img src="${cfg.logo}" style="max-height:150px;max-width:280px;margin-bottom:8px;">`:''}
-      <div style="font-size:24px;font-weight:bold;letter-spacing:2px;">${escapeHtml(cfg.nombre||'Portal Imperial')}</div>
-      <div style="font-size:13px;letter-spacing:3px;color:#333;margin-top:2px;">COMIDA CHINA</div>
+      <div style="font-size:30px;font-weight:800;letter-spacing:1px;color:#000;font-family:'Inter',sans-serif;">Portal Imperial</div>
+      <div style="font-size:15px;font-style:italic;font-family:Georgia,'Times New Roman',serif;color:#000;margin-top:2px;">Exquisita Comida Típica China</div>
       <div style="font-size:12px;margin-top:6px;line-height:1.5;">
         ${cfg.nit?'NIT: '+cfg.nit+'<br>':''}${escapeHtml(cfg.dir||'')}<br>Tel: ${cfg.tel||''}
       </div>
@@ -2122,7 +2126,13 @@ function contable(){
   // Los RETIROS NO son gasto: son dinero que el jefe saca (sigue siendo del negocio).
   const totalEgresos=gastosCaja+totalGastosNeg;
   // Retiros: se muestran aparte como SALIDA DE EFECTIVO (no reduce la utilidad).
-  const totalSalidasEfectivo=retiros;
+  // Retiros con caja CERRADA (dinero que el jefe saca después de cerrar, de la base guardada)
+  const cfgG=DB.get('config')||{};
+  const retirosCerrada=(cfgG.retirosCajaCerrada||[]).filter(r=>diaColombia(new Date(r.fecha).getTime()).substring(0,7)===mes);
+  const totalRetirosCerrada=retirosCerrada.reduce((a,r)=>a+(r.monto||0),0);
+  // Salida de efectivo TOTAL = retiros de caja abierta + retiros con caja cerrada.
+  // NO es gasto: es dinero que el jefe saca (sigue siendo del negocio, no reduce la ganancia).
+  const totalSalidasEfectivo=retiros+totalRetirosCerrada;
 
   // ── COSTO DE MATERIA PRIMA (si el inventario está al día; aquí 0 si no hay módulo)
   const costoMateriaPrima=0;
@@ -2147,7 +2157,7 @@ function contable(){
   const nombreMes=new Date(Date.UTC(anio,mesNum-1,1)).toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'});
 
   // Guardar datos para exportar
-  window._contableData={mes,nombreMes,totalVentas,porMetodo,totalEgresos,gastosCaja,gastos,nomina,retiros,totalSalidasEfectivo,gastosPorConcepto,totalGastosNeg,gastosNegPorConcepto,gastosNeg,utilidad,totalPropinas,totalDomicilios,totalRecargos,cierresMes,sumaDiferencias,topProductos,topDias,totalVentasPrev,pctVentas};
+  window._contableData={mes,nombreMes,totalVentas,porMetodo,totalEgresos,gastosCaja,gastos,nomina,retiros,totalRetirosCerrada,totalSalidasEfectivo,retirosCerrada,gastosPorConcepto,totalGastosNeg,gastosNegPorConcepto,gastosNeg,utilidad,totalPropinas,totalDomicilios,totalRecargos,cierresMes,sumaDiferencias,topProductos,topDias,totalVentasPrev,pctVentas};
 
   return `
   <div class="card" style="background:linear-gradient(145deg,rgba(212,175,55,0.1),var(--dark));">
@@ -2183,7 +2193,7 @@ function contable(){
       ${Object.entries(gastosPorConcepto).length>0?Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join(''):'<p class="text-gray text-xs">Sin gastos de caja este mes.</p>'}
       ${Object.entries(gastosNegPorConcepto).length>0?`<div class="text-xs text-gray" style="margin:8px 0 4px;">Gastos del negocio (arriendo, recibos, etc.):</div>${Object.entries(gastosNegPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join('')}`:''}
       <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(192,57,43,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL GASTOS</span><strong class="text-red">${fmtMoney(totalEgresos)}</strong></div>
-      ${totalSalidasEfectivo>0?`<div class="flex-between" style="padding:10px 0;border-top:1px dashed rgba(255,255,255,0.15);margin-top:8px;"><span>${ic('i-cash')} Salida de efectivo (retiros del jefe)</span><strong style="color:var(--blue-l)">${fmtMoney(totalSalidasEfectivo)}</strong></div><p class="text-xs text-gray">Esto NO es un gasto: es dinero que el jefe sacó de la caja. Sigue siendo del negocio, no reduce la ganancia.</p>`:''}
+      ${totalSalidasEfectivo>0?`<div class="flex-between" style="padding:10px 0;border-top:1px dashed rgba(255,255,255,0.15);margin-top:8px;"><span>${ic('i-cash')} Salida de efectivo (dinero que sacó el jefe)</span><strong style="color:var(--blue-l)">${fmtMoney(totalSalidasEfectivo)}</strong></div>${retiros>0?`<div class="flex-between" style="padding:3px 0;"><span class="text-xs text-gray">↳ retiros durante el día (caja abierta)</span><span class="text-xs" style="color:var(--blue-l)">${fmtMoney(retiros)}</span></div>`:''}${totalRetirosCerrada>0?`<div class="flex-between" style="padding:3px 0;"><span class="text-xs text-gray">↳ retiros después de cerrar caja</span><span class="text-xs" style="color:var(--blue-l)">${fmtMoney(totalRetirosCerrada)}</span></div>`:''}<p class="text-xs text-gray" style="margin-top:4px;">NO es un gasto: es dinero del negocio que el jefe sacó. Se informa para tener contabilidad clara, pero no reduce la ganancia.</p>`:''}
     </div>
   </div>
 
@@ -3007,7 +3017,7 @@ function buildModals(){
 
   <div id="modal-cliente" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-cli-title">${ic('i-delivery')} Nuevo Cliente</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cliente')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-cli-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="c-nombre"></div><div class="form-group"><label>Teléfono</label><input type="text" id="c-tel"></div><div class="form-group" style="grid-column:1/-1"><label>Dirección</label><input type="text" id="c-dir"></div><div class="form-group"><label>Barrio</label><input type="text" id="c-barrio"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cliente')">Cancelar</button><button class="btn btn-gold" onclick="saveCliente()">Guardar</button></div></div></div>
 
-  <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="jefe">Jefe</option><option value="supervisor">Supervisor</option><option value="cajero" selected>Cajero</option><option value="mesero">Mesero</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
+  <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="dueño">Dueño</option><option value="jefe">Jefe</option><option value="supervisor">Supervisor</option><option value="cajero" selected>Cajero</option><option value="mesero">Mesero</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
 
   <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Entremeses</option><option>Chowfan</option><option>Chopsuey</option><option>Lomein</option><option>Platos Combinados</option><option>Costillas</option><option>Pollo</option><option>Platos Personales</option><option>Combos Familiares</option><option>Bebidas</option><option>Promo del Mes</option><option>Adicionales</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
 }
