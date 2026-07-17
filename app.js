@@ -928,18 +928,13 @@ function facturaHTML(v){
       <div style="display:flex;justify-content:space-between;"><span>Atendió</span><span>${escapeHtml(v.atendidoPor||v.mesero||v.cajero||'')}</span></div>
       ${v.cobradoPor && v.cobradoPor!==(v.atendidoPor||v.mesero||v.cajero)?`<div style="display:flex;justify-content:space-between;"><span>Cobró</span><span>${escapeHtml(v.cobradoPor)}</span></div>`:''}
     </div>
-    <div style="border-top:1.5px solid #000;padding-top:6px;">
-      <div style="display:flex;font-size:15px;font-weight:bold;letter-spacing:0.5px;border-bottom:1px solid #000;padding-bottom:5px;margin-bottom:6px;color:#000;">
-        <span style="width:38px;">CANT</span><span style="flex:1;">DESCRIPCIÓN</span><span style="width:80px;text-align:right;">VALOR</span>
+    <div style="border-top:1px dashed #000;padding-top:6px;">
+      <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:bold;letter-spacing:0.5px;border-bottom:1px solid #000;padding-bottom:5px;margin-bottom:6px;color:#000;">
+        <span style="flex:1;">CANT / PRODUCTO</span><span>VALOR</span>
       </div>
-      ${v.items.map(i=>`<div style="display:flex;font-size:15px;padding:5px 0;line-height:1.35;border-bottom:1px dotted #999;font-weight:500;">
-        <span style="width:38px;">${i.qty}</span>
-        <span style="flex:1;padding-right:6px;">${escapeHtml(i.nombre)}${i.qty>1?`<br><span style="font-size:14px;color:#000;">${fmtMoney(i.precio)} c/u</span>`:''}</span>
-        <span style="width:80px;text-align:right;">${fmtMoney(i.precio*i.qty)}</span>
-      </div>`).join('')}
-      <div style="font-size:14px;color:#000;text-align:right;margin-top:5px;font-weight:500;">${totalItems} artículo(s)</div>
+      ${v.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:15px;padding:4px 0;line-height:1.35;font-weight:500;"><span style="flex:1;padding-right:8px;">${i.qty} × ${escapeHtml(i.nombre)}</span><span style="white-space:nowrap;">${fmtMoney(i.precio*i.qty)}</span></div>`).join('')}
     </div>
-    <div style="margin-top:8px;padding-top:6px;font-size:15px;font-weight:500;">
+    <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;font-size:15px;font-weight:500;">
       <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Subtotal</span><span>${fmtMoney(subtotalItems)}</span></div>
       ${v.descuento>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Descuento</span><span>-${fmtMoney(v.descuento)}</span></div>`:''}
       ${v.valorDom>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Domicilio</span><span>${fmtMoney(v.valorDom)}</span></div>`:''}
