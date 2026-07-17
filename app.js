@@ -347,7 +347,7 @@ const NAV = [
   {id:'usuarios',icon:'i-users',label:'Usuarios',roles:['admin']},
   {id:'historial',icon:'i-history',label:'Historial',roles:['admin','supervisor','jefe']},
   {id:'reportes',icon:'i-report',label:'Reportes',roles:['admin','supervisor','jefe','dueño']},
-  {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin','dueño']},
+  {id:'contable',icon:'i-report',label:'Registro Contable',roles:['admin','jefe','dueño']},
   {id:'gastosneg',icon:'i-cash',label:'Gastos del Negocio',roles:['admin','jefe','dueño']},
   {id:'auditoria',icon:'i-audit',label:'Auditoría',roles:['admin']},
   {id:'asistencia',icon:'i-clock',label:'Asistencia',roles:['admin','supervisor','jefe','dueño']},
@@ -1955,7 +1955,7 @@ function renderHistTable(vs){
 // Se guardan con concepto, número de factura, fecha y valor, agrupados por mes.
 let _gastosNegMes = null; // 'YYYY-MM'; null = mes actual
 function gastosneg(){
-  if(!['admin','jefe'].includes(STATE.user.rol)){ return '<div class="card"><p class="text-gray">No autorizado.</p></div>'; }
+  if(!['admin','jefe','dueño'].includes(STATE.user.rol)){ return '<div class="card"><p class="text-gray">No autorizado.</p></div>'; }
   const gastos=DB.get('gastos_negocio')||[];
   const mesActual=diaColombia().substring(0,7);
   const mes=_gastosNegMes||mesActual;
@@ -2069,7 +2069,7 @@ function exportarGastosNegExcel(){
 // Informe interno de gestión para el dueño (NO es tributario, NO tiene que ver con la DIAN).
 let _contableMes = null; // 'YYYY-MM' seleccionado; null = mes actual
 function contable(){
-  if(STATE.user.rol!=='admin'){ return '<div class="card"><p class="text-gray">Solo el administrador puede ver el Registro Contable.</p></div>'; }
+  if(!['admin','jefe','dueño'].includes(STATE.user.rol)){ return '<div class="card"><p class="text-gray">Solo el administrador, jefe o dueño pueden ver el Registro Contable.</p></div>'; }
   const vs=DB.get('ventas')||[];
   const cierres=DB.get('cierres')||[];
   // Mes seleccionado (por defecto el actual, en hora Colombia)
