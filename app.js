@@ -340,6 +340,7 @@ const NAV = [
   {sec:'Operaciones'},
   {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor','jefe','dueño']},
   {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero','jefe']},
+  {id:'cuadredomi',icon:'i-delivery',label:'Cuadre Domi',roles:['admin','cajero','supervisor','jefe']},
   {id:'cocina',icon:'i-chef',label:'Cocina',roles:['admin','cocina','supervisor','jefe','dueño'],badge:'cocina'},
   {id:'tiempos',icon:'i-clock',label:'Tiempos de Entrega',roles:['admin','cajero','supervisor','mesero','cocina','jefe','dueño']},
   {id:'impresiones',icon:'i-orders',label:'Impresiones',roles:['admin','cajero','supervisor','impresiones','jefe']},
@@ -384,6 +385,7 @@ function updateBadges(){
 const PAGE_META={
   dashboard:['i-dashboard','Dashboard'], ventas:['i-cart','Nueva Venta'], pedidos:['i-orders','Pedidos'],
   listos:['i-ready','Pedidos Listos'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
+  cuadredomi:['i-delivery','Cuadre de Domiciliarios'],
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
   reportes:['i-report','Reportes'], contable:['i-report','Registro Contable Mensual'], gastosneg:['i-cash','Gastos del Negocio'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
   asistencia:['i-clock','Control de Asistencia'],
@@ -397,7 +399,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cocina,usuarios,historial,reportes,contable,gastosneg,auditoria,menu,config,asistencia,tiempos,impresiones};
+  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cuadredomi,cocina,usuarios,historial,reportes,contable,gastosneg,auditoria,menu,config,asistencia,tiempos,impresiones};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -1867,6 +1869,209 @@ function domicilios(){
     ${cls.map(c=>`<tr><td class="font-bold">${escapeHtml(c.nombre)}</td><td>${escapeHtml(c.tel||'')}</td><td>${escapeHtml(c.dir||'')}</td><td>${c.barrio?`<span class="badge badge-blue">${escapeHtml(c.barrio)}</span>`:'—'}</td><td>${c.pedidos||0}</td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalCliente('${c.id}')">${ic('i-edit')}</button>${(STATE.user.rol==='admin'||STATE.user.rol==='supervisor')?`<button class="btn btn-danger btn-sm" onclick="eliminarCliente('${c.id}')">${ic('i-trash')}</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>`}</div>`;
 }
+
+// ========================= CUADRE DE DOMICILIARIOS =========================
+// Muestra, por cada mensajero, los pedidos que llevó separados en EFECTIVO y BANCO,
+// tanto el valor de la comida como el valor de los domicilios (lo que le toca a él).
+// Si un domicilio se elimina, desaparece de 'ventas' y por lo tanto se descuenta solo.
+function cuadredomi(){
+  const cajaActual=(DB.get('cajas')||[]).find(c=>c.estado==='abierta');
+  const todas=DB.get('ventas')||[];
+  // Solo domicilios pagados de la jornada actual (si hay caja abierta)
+  let vs=todas.filter(v=>v.tipo==='domicilio' && esPagada(v));
+  if(cajaActual) vs=vs.filter(v=>v.cajaId===cajaActual.id);
+  else { const t=today(); vs=vs.filter(v=>(v.fecha||'').startsWith(t)); }
+
+  // Agrupar por domiciliario
+  const grupos={};
+  vs.forEach(v=>{
+    const nom=v.domiciliario||'(sin asignar)';
+    if(!grupos[nom]) grupos[nom]={nombre:nom, pedidos:[], comidaEf:0, comidaBanco:0, comidaTarjeta:0, domEf:0, domBanco:0};
+    const g=grupos[nom];
+    g.pedidos.push(v);
+    // Reparto de la COMIDA por método de pago
+    const pv=v.pagosVenta||v.pagos||{};
+    if(pv && typeof pv==='object' && (pv.efectivo||pv.banco||pv.tarjeta)){
+      g.comidaEf    += pv.efectivo||0;
+      g.comidaBanco += pv.banco||0;
+      g.comidaTarjeta += pv.tarjeta||0;
+    } else {
+      // Respaldo: si no hay reparto, usar el método principal
+      const comida=v.comida!==undefined?v.comida:(v.total||0);
+      if(v.metodo==='efectivo') g.comidaEf+=comida;
+      else if(v.metodo==='banco') g.comidaBanco+=comida;
+      else if(v.metodo==='tarjeta') g.comidaTarjeta+=comida;
+      else g.comidaEf+=comida;
+    }
+    // Valor del DOMICILIO (lo que le corresponde al mensajero)
+    const dom=v.valorDom||0;
+    if(dom>0){ if(v.domPorBanco) g.domBanco+=dom; else g.domEf+=dom; }
+  });
+  const lista=Object.values(grupos).sort((a,b)=>b.pedidos.length-a.pedidos.length);
+
+  // Totales generales
+  const tot={pedidos:0, comidaEf:0, comidaBanco:0, comidaTarjeta:0, domEf:0, domBanco:0};
+  lista.forEach(g=>{ tot.pedidos+=g.pedidos.length; tot.comidaEf+=g.comidaEf; tot.comidaBanco+=g.comidaBanco; tot.comidaTarjeta+=g.comidaTarjeta; tot.domEf+=g.domEf; tot.domBanco+=g.domBanco; });
+
+  if(!lista.length){
+    return `<div class="card"><div class="card-title">${ic('i-delivery')} Cuadre de Domiciliarios</div>
+      <div class="empty-state">${ic('i-empty')}<p>No hay domicilios pagados en esta jornada.</p></div></div>`;
+  }
+
+  return `
+  <div class="card" style="background:linear-gradient(135deg,rgba(212,175,55,.06),transparent);">
+    <div class="card-title" style="margin:0;">${ic('i-delivery')} Cuadre de Domiciliarios ${cajaActual?'<span class="badge badge-green">Jornada actual</span>':'<span class="badge badge-blue">Hoy</span>'}</div>
+    <p class="text-gray" style="margin-top:6px;">Cuánto debe entregar cada mensajero y cuánto le corresponde por domicilios. Si eliminas un domicilio, se descuenta automáticamente de este cuadre.</p>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card green"><div class="stat-label">Comida en efectivo</div><div class="stat-value">${fmtMoney(tot.comidaEf)}</div><div class="stat-sub">deben entregar los mensajeros</div></div>
+    <div class="stat-card blue"><div class="stat-label">Comida por banco</div><div class="stat-value">${fmtMoney(tot.comidaBanco)}</div><div class="stat-sub">ya está en la cuenta</div></div>
+    <div class="stat-card gold"><div class="stat-label">Domicilios (para ellos)</div><div class="stat-value">${fmtMoney(tot.domEf+tot.domBanco)}</div><div class="stat-sub">efectivo ${fmtMoney(tot.domEf)} · banco ${fmtMoney(tot.domBanco)}</div></div>
+    <div class="stat-card"><div class="stat-label">Domicilios entregados</div><div class="stat-value">${tot.pedidos}</div><div class="stat-sub">${lista.length} mensajero(s)</div></div>
+  </div>
+
+  ${lista.map(g=>{
+    // Lo que el mensajero debe entregar en el cajón:
+    // la comida que cobró en efectivo, menos el domicilio que le toca de esos pedidos en efectivo
+    const entregaCajon = g.comidaEf;
+    const leTocaEf = g.domEf;
+    const leTocaBanco = g.domBanco;
+    const netoEntregar = entregaCajon - leTocaEf;
+    return `
+    <div class="card">
+      <div class="flex-between mb-2" style="flex-wrap:wrap;gap:10px;">
+        <div class="card-title" style="margin:0;">${ic('i-delivery')} ${escapeHtml(g.nombre)}</div>
+        <span class="badge badge-blue">${g.pedidos.length} domicilio(s)</span>
+      </div>
+      <div class="grid-2" style="gap:16px;">
+        <div>
+          <div class="card-title" style="font-size:13px;">Valor de los pedidos (comida)</div>
+          <div class="resumen-row"><span>En efectivo (le pagaron en la mano)</span><strong class="text-green">${fmtMoney(g.comidaEf)}</strong></div>
+          <div class="resumen-row"><span>Por banco / transferencia</span><strong class="text-blue">${fmtMoney(g.comidaBanco)}</strong></div>
+          ${g.comidaTarjeta>0?`<div class="resumen-row"><span>Por tarjeta</span><strong>${fmtMoney(g.comidaTarjeta)}</strong></div>`:''}
+          <div class="resumen-row"><span><strong>Total en pedidos</strong></span><strong>${fmtMoney(g.comidaEf+g.comidaBanco+g.comidaTarjeta)}</strong></div>
+        </div>
+        <div>
+          <div class="card-title" style="font-size:13px;">Domicilios (le corresponden a él)</div>
+          <div class="resumen-row"><span>Domicilios cobrados en efectivo</span><strong class="text-green">${fmtMoney(g.domEf)}</strong></div>
+          <div class="resumen-row"><span>Domicilios que entraron por banco</span><strong class="text-blue">${fmtMoney(g.domBanco)}</strong></div>
+          <div class="resumen-row"><span><strong>Total domicilios</strong></span><strong class="text-gold">${fmtMoney(g.domEf+g.domBanco)}</strong></div>
+        </div>
+      </div>
+      <div class="cuadre-final">
+        <div class="cf-item"><span>Debe entregar en el cajón</span><strong class="text-green">${fmtMoney(entregaCajon)}</strong></div>
+        <div class="cf-op">−</div>
+        <div class="cf-item"><span>Se queda con (domicilios efectivo)</span><strong class="text-gold">${fmtMoney(leTocaEf)}</strong></div>
+        <div class="cf-op">=</div>
+        <div class="cf-item cf-total"><span>ENTREGA NETA</span><strong>${fmtMoney(netoEntregar)}</strong></div>
+      </div>
+      ${leTocaBanco>0?`<p class="text-gray" style="margin-top:8px;font-size:12px;">↳ Además se le deben pagar ${fmtMoney(leTocaBanco)} en efectivo del cajón, porque esos domicilios entraron por banco.</p>`:''}
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;font-size:13px;color:var(--gold);">Ver los ${g.pedidos.length} domicilio(s) de ${escapeHtml(g.nombre)}</summary>
+        <div class="table-wrap" style="margin-top:10px;"><table class="data-table">
+          <thead><tr><th>Factura</th><th>Cliente</th><th>Comida</th><th>Domicilio</th><th>Pago</th><th>Hora</th></tr></thead>
+          <tbody>
+          ${g.pedidos.map(v=>{
+            const pv=v.pagosVenta||v.pagos||{};
+            let metodoTxt='';
+            if(pv.efectivo>0) metodoTxt+='Efectivo ';
+            if(pv.banco>0) metodoTxt+='Banco ';
+            if(pv.tarjeta>0) metodoTxt+='Tarjeta';
+            if(!metodoTxt) metodoTxt=v.metodo||'—';
+            return `<tr>
+              <td class="font-bold">${escapeHtml(v.factura||refPedido(v))}</td>
+              <td>${escapeHtml(v.cliNombre||'—')}${v.cliTel?`<br><span class="text-gray" style="font-size:11px;">${escapeHtml(v.cliTel)}</span>`:''}</td>
+              <td>${fmtMoney(v.comida!==undefined?v.comida:v.total)}</td>
+              <td class="text-gold">${fmtMoney(v.valorDom||0)}${v.domPorBanco?' <span class="badge badge-blue" style="font-size:9px;">banco</span>':''}</td>
+              <td>${escapeHtml(metodoTxt.trim())}</td>
+              <td class="text-gray" style="font-size:12px;">${(v.fecha||'').substring(11,16)}</td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table></div>
+      </details>
+    </div>`;
+  }).join('')}
+
+  <div class="card">
+    <div class="card-title">${ic('i-report')} Resumen para cuadrar</div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Mensajero</th><th>Pedidos</th><th>Comida efectivo</th><th>Comida banco</th><th>Domi efectivo</th><th>Domi banco</th><th>Entrega neta</th></tr></thead>
+      <tbody>
+      ${lista.map(g=>`<tr>
+        <td class="font-bold">${escapeHtml(g.nombre)}</td>
+        <td>${g.pedidos.length}</td>
+        <td class="text-green">${fmtMoney(g.comidaEf)}</td>
+        <td class="text-blue">${fmtMoney(g.comidaBanco)}</td>
+        <td class="text-gold">${fmtMoney(g.domEf)}</td>
+        <td class="text-gold">${fmtMoney(g.domBanco)}</td>
+        <td class="font-bold">${fmtMoney(g.comidaEf-g.domEf)}</td>
+      </tr>`).join('')}
+      <tr style="border-top:2px solid var(--gold);font-weight:800;">
+        <td>TOTAL</td><td>${tot.pedidos}</td>
+        <td class="text-green">${fmtMoney(tot.comidaEf)}</td>
+        <td class="text-blue">${fmtMoney(tot.comidaBanco)}</td>
+        <td class="text-gold">${fmtMoney(tot.domEf)}</td>
+        <td class="text-gold">${fmtMoney(tot.domBanco)}</td>
+        <td>${fmtMoney(tot.comidaEf-tot.domEf)}</td>
+      </tr>
+      </tbody>
+    </table></div>
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="imprimirCuadreDomi()">${ic('i-print')} Imprimir cuadre</button>
+  </div>`;
+}
+
+// Imprime el cuadre para entregárselo a los mensajeros
+function imprimirCuadreDomi(){
+  const cajaActual=(DB.get('cajas')||[]).find(c=>c.estado==='abierta');
+  const todas=DB.get('ventas')||[];
+  let vs=todas.filter(v=>v.tipo==='domicilio' && esPagada(v));
+  if(cajaActual) vs=vs.filter(v=>v.cajaId===cajaActual.id);
+  else { const t=today(); vs=vs.filter(v=>(v.fecha||'').startsWith(t)); }
+  const grupos={};
+  vs.forEach(v=>{
+    const nom=v.domiciliario||'(sin asignar)';
+    if(!grupos[nom]) grupos[nom]={nombre:nom, n:0, comidaEf:0, comidaBanco:0, domEf:0, domBanco:0};
+    const g=grupos[nom]; g.n++;
+    const pv=v.pagosVenta||v.pagos||{};
+    if(pv&&(pv.efectivo||pv.banco||pv.tarjeta)){ g.comidaEf+=pv.efectivo||0; g.comidaBanco+=(pv.banco||0)+(pv.tarjeta||0); }
+    else { const c=v.comida!==undefined?v.comida:(v.total||0); if(v.metodo==='efectivo')g.comidaEf+=c; else g.comidaBanco+=c; }
+    const dom=v.valorDom||0;
+    if(dom>0){ if(v.domPorBanco) g.domBanco+=dom; else g.domEf+=dom; }
+  });
+  const lista=Object.values(grupos);
+  const fecha=new Date().toLocaleString('es-CO');
+  const html=`<div style="font-family:Arial,sans-serif;color:#000;padding:14px;max-width:190mm;margin:0 auto;">
+    <div style="text-align:center;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:12px;">
+      <div style="font-size:22px;font-weight:800;">PORTAL IMPERIAL</div>
+      <div style="font-size:16px;font-weight:700;margin-top:3px;">CUADRE DE DOMICILIARIOS</div>
+      <div style="font-size:12px;">${fecha}</div>
+    </div>
+    ${lista.map(g=>`
+      <div style="border:1px solid #000;margin-bottom:12px;padding:10px;">
+        <div style="font-size:16px;font-weight:800;border-bottom:1px solid #000;padding-bottom:5px;margin-bottom:7px;">${escapeHtml(g.nombre)} — ${g.n} domicilio(s)</div>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <tr><td style="padding:3px 0;">Comida cobrada en EFECTIVO</td><td style="text-align:right;font-weight:700;">${fmtMoney(g.comidaEf)}</td></tr>
+          <tr><td style="padding:3px 0;">Comida cobrada por BANCO</td><td style="text-align:right;">${fmtMoney(g.comidaBanco)}</td></tr>
+          <tr><td style="padding:3px 0;">Domicilios en efectivo (para él)</td><td style="text-align:right;">${fmtMoney(g.domEf)}</td></tr>
+          <tr><td style="padding:3px 0;">Domicilios por banco (se le pagan)</td><td style="text-align:right;">${fmtMoney(g.domBanco)}</td></tr>
+          <tr style="border-top:2px solid #000;"><td style="padding:6px 0;font-size:15px;font-weight:800;">ENTREGA NETA AL CAJÓN</td><td style="text-align:right;font-size:17px;font-weight:800;">${fmtMoney(g.comidaEf-g.domEf)}</td></tr>
+        </table>
+        <div style="margin-top:22px;display:flex;gap:30px;font-size:11px;">
+          <div style="flex:1;border-top:1px solid #000;padding-top:4px;text-align:center;">Firma del mensajero</div>
+          <div style="flex:1;border-top:1px solid #000;padding-top:4px;text-align:center;">Recibido por</div>
+        </div>
+      </div>`).join('')}
+    <div style="text-align:center;font-size:10px;margin-top:14px;border-top:1px dashed #000;padding-top:7px;">
+      Software administrativo por WALLACE COMPANY SYSTEM · wallacecompany11@gmail.com
+    </div>
+  </div>`;
+  const w=window.open('','_blank','width=800,height=680');
+  w.document.write('<html><head><title>Cuadre de Domiciliarios</title><meta charset="utf-8"><style>@page{size:letter;margin:12mm;} body{margin:0;}</style></head><body>'+html+'</body></html>');
+  w.document.close(); setTimeout(()=>w.print(),350);
+}
+
 function openModalCliente(id){
   ['c-nombre','c-tel','c-dir','c-barrio'].forEach(i=>document.getElementById(i).value='');
   document.getElementById('edit-cli-id').value='';
