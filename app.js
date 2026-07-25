@@ -1456,6 +1456,33 @@ function cocina(){
     <span class="badge badge-blue">Ordenado por tiempo de espera · Sin precios</span></div>
     <div id="kds-container">${renderKDS(vs)}</div></div>`;
 }
+// Busca la receta de un item del pedido: primero por id, si no por nombre
+function recetaDeItem(i){
+  const ps=DB.get('productos')||[];
+  let p = i.id ? ps.find(x=>x.id===i.id) : null;
+  if(!p) p = ps.find(x=>(x.nombre||'').toLowerCase()===(i.nombre||'').toLowerCase());
+  return (p && Array.isArray(p.receta)) ? p.receta : [];
+}
+// Abre el modal con los ingredientes y medidas del plato (para la cocina)
+function verReceta(prodId, nombre){
+  const ps=DB.get('productos')||[];
+  let p = prodId ? ps.find(x=>x.id===prodId) : null;
+  if(!p && nombre) p = ps.find(x=>(x.nombre||'').toLowerCase()===(nombre||'').toLowerCase());
+  if(!p){ toast('No se encontró el plato','error'); return; }
+  const rec = Array.isArray(p.receta)?p.receta:[];
+  const body=document.getElementById('receta-ver-body');
+  const titulo=document.getElementById('receta-ver-title');
+  if(titulo) titulo.innerHTML=ic('i-chef')+' '+escapeHtml(p.nombre);
+  if(body){
+    body.innerHTML = rec.length
+      ? `<table class="data-table"><thead><tr><th>Ingrediente</th><th>Medida</th></tr></thead><tbody>
+         ${rec.map(r=>`<tr><td class="font-bold">${escapeHtml(r.nombre)}</td><td class="text-gold">${escapeHtml(r.cant||'—')}</td></tr>`).join('')}
+         </tbody></table>
+         ${p.desc?`<p class="text-sm text-gray" style="margin-top:10px;">${escapeHtml(p.desc)}</p>`:''}`
+      : '<p class="text-gray">Este plato no tiene receta registrada.</p>';
+  }
+  openModal('modal-receta-ver');
+}
 function renderKDS(vs){
   if(vs.length===0) return `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos en cocina</p></div>`;
   return `<div class="kds-grid">${vs.map(v=>{
@@ -1467,7 +1494,7 @@ function renderKDS(vs){
       <span class="kds-timer ${t==='rojo'?'text-red':t==='amarillo'?'text-gold':'text-green'}">${min} min</span></div>
       <div class="text-sm" style="margin-bottom:8px;color:var(--light);">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
       ${v.tipo==='domicilio'?`<div class="text-xs text-gray" style="margin-bottom:8px;">${ic('i-pin')} ${escapeHtml(v.cliDir||'')}<br>${ic('i-phone')} ${escapeHtml(v.cliTel||'')}</div>`:''}
-      ${v.items.map(i=>`<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);"><span style="font-size:16px;font-weight:700;">${i.qty}x</span> <span style="font-size:14px;">${escapeHtml(i.nombre)}</span>${i.obs?`<div class="text-xs text-red" style="margin-top:2px;">${ic('i-warning')} ${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
+      ${v.items.map(i=>{const tieneRec=recetaDeItem(i).length;return `<div ${tieneRec?`onclick="verReceta('${i.id||''}','${escapeHtml((i.nombre||'').replace(/'/g,''))}')"`:''} style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);${tieneRec?'cursor:pointer;':''}" ${tieneRec?'title="Ver ingredientes"':''}><span style="font-size:16px;font-weight:700;">${i.qty}x</span> <span style="font-size:14px;">${escapeHtml(i.nombre)}</span>${tieneRec?` <span class="text-gold" style="font-size:12px;">${ic('i-chef')} ver receta</span>`:''}${i.obs?`<div class="text-xs text-red" style="margin-top:2px;">${ic('i-warning')} ${escapeHtml(i.obs)}</div>`:''}</div>`;}).join('')}
       ${v.pedidoAgregado&&v.itemsAgregados&&v.itemsAgregados.length?`<div style="margin-top:8px;border:2px solid var(--gold);border-radius:8px;padding:8px;background:rgba(212,175,55,0.12);">
         <div style="font-size:11px;font-weight:bold;color:var(--gold);text-align:center;margin-bottom:5px;">➕ NUEVO — AGREGADO AHORA</div>
         ${v.itemsAgregados.map(i=>`<div style="padding:3px 0;"><span style="font-size:16px;font-weight:700;color:var(--gold);">${i.qty}x</span> <span style="font-size:14px;color:var(--gold);">${escapeHtml(i.nombre)}</span>${i.obs?`<div class="text-xs" style="color:var(--orange);margin-top:2px;">${escapeHtml(i.obs)}</div>`:''}</div>`).join('')}
@@ -2629,19 +2656,43 @@ function menu(){
   const ps=DB.get('productos')||[];
   return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-menu-food')} Gestión del Menú</div><button class="btn btn-primary btn-sm" onclick="openModalProducto()">${ic('i-plus')} Nuevo Producto</button></div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Nombre</th><th>Categoría</th><th>Precio</th><th>Estado</th><th>Disponible hoy</th><th>Acciones</th></tr></thead><tbody>
-    ${ps.map(p=>`<tr><td class="font-bold">${escapeHtml(p.nombre)}${p.agotado?' <span class="badge badge-red">AGOTADO</span>':''}</td><td><span class="badge badge-blue">${escapeHtml(p.cat)}</span></td><td class="text-gold font-bold">${fmtMoney(p.precio)}</td><td><span class="badge ${p.activo?'badge-green':'badge-gray'}">${p.activo?'Activo':'Inactivo'}</span></td><td><button class="btn btn-${p.agotado?'danger':'ghost'} btn-sm" onclick="toggleAgotado('${p.id}')">${p.agotado?'Marcar disponible':'Marcar agotado'}</button></td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalProducto('${p.id}')" title="Editar">${ic('i-edit')}</button><button class="btn btn-${p.activo?'danger':'success'} btn-sm" onclick="toggleProducto('${p.id}')" title="${p.activo?'Desactivar':'Activar'}">${p.activo?ic('i-ban'):ic('i-check')}</button></td></tr>`).join('')}
+    ${ps.map(p=>`<tr><td class="font-bold">${escapeHtml(p.nombre)}${p.agotado?' <span class="badge badge-red">AGOTADO</span>':''}${(p.receta&&p.receta.length)?` <span class="badge badge-green" title="Tiene receta">${ic('i-chef')} ${p.receta.length}</span>`:''}</td><td><span class="badge badge-blue">${escapeHtml(p.cat)}</span></td><td class="text-gold font-bold">${fmtMoney(p.precio)}</td><td><span class="badge ${p.activo?'badge-green':'badge-gray'}">${p.activo?'Activo':'Inactivo'}</span></td><td><button class="btn btn-${p.agotado?'danger':'ghost'} btn-sm" onclick="toggleAgotado('${p.id}')">${p.agotado?'Marcar disponible':'Marcar agotado'}</button></td><td style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="openModalProducto('${p.id}')" title="Editar">${ic('i-edit')}</button><button class="btn btn-${p.activo?'danger':'success'} btn-sm" onclick="toggleProducto('${p.id}')" title="${p.activo?'Desactivar':'Activar'}">${p.activo?ic('i-ban'):ic('i-check')}</button></td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
+let recetaTmp=[];  // receta que se está editando en el modal
 function openModalProducto(id){
   ['p-nombre','p-precio','p-desc'].forEach(i=>document.getElementById(i).value=''); document.getElementById('edit-prod-id').value=''; document.getElementById('p-cat').value='Entremeses';
+  recetaTmp=[];
   if(id){ const p=(DB.get('productos')||[]).find(x=>x.id===id); if(p){ document.getElementById('edit-prod-id').value=p.id;
-    document.getElementById('p-nombre').value=p.nombre; document.getElementById('p-precio').value=p.precio; document.getElementById('p-cat').value=p.cat; }}
+    document.getElementById('p-nombre').value=p.nombre; document.getElementById('p-precio').value=p.precio; document.getElementById('p-cat').value=p.cat;
+    if(document.getElementById('p-desc')) document.getElementById('p-desc').value=p.desc||'';
+    recetaTmp = Array.isArray(p.receta)?p.receta.map(r=>({...r})):[]; }}
   document.getElementById('modal-prod-title').innerHTML=ic('i-menu-food')+(id?' Editar Producto':' Nuevo Producto');
+  renderRecetaTmp();
   openModal('modal-producto');
 }
+function renderRecetaTmp(){
+  const cont=document.getElementById('receta-lista'); if(!cont) return;
+  if(!recetaTmp.length){ cont.innerHTML='<p class="text-xs text-gray">Sin ingredientes aún.</p>'; return; }
+  cont.innerHTML=recetaTmp.map((r,i)=>`<div class="flex-between" style="padding:6px 8px;border:1px solid rgba(255,255,255,0.06);border-radius:6px;margin-bottom:5px;">
+    <span><strong>${escapeHtml(r.nombre)}</strong>${r.cant?` <span class="text-gold">· ${escapeHtml(r.cant)}</span>`:''}</span>
+    <button type="button" class="btn btn-danger btn-sm" onclick="quitarIngrediente(${i})">${ic('i-trash')}</button>
+  </div>`).join('');
+}
+function agregarIngrediente(){
+  const n=document.getElementById('ing-nombre'), c=document.getElementById('ing-cant');
+  const nombre=(n.value||'').trim(); const cant=(c.value||'').trim();
+  if(!nombre){ toast('Escribe el ingrediente','error'); return; }
+  recetaTmp.push({nombre, cant});
+  n.value=''; c.value=''; n.focus();
+  renderRecetaTmp();
+}
+function quitarIngrediente(i){ recetaTmp.splice(i,1); renderRecetaTmp(); }
 function saveProducto(){
   const id=document.getElementById('edit-prod-id').value; const ps=DB.get('productos')||[];
-  const data={nombre:document.getElementById('p-nombre').value.trim(),precio:parseFloat(document.getElementById('p-precio').value)||0,cat:document.getElementById('p-cat').value};
+  const descEl=document.getElementById('p-desc');
+  const data={nombre:document.getElementById('p-nombre').value.trim(),precio:parseFloat(document.getElementById('p-precio').value)||0,cat:document.getElementById('p-cat').value,
+    desc:descEl?descEl.value.trim():'', receta:recetaTmp.slice()};
   if(!data.nombre||!data.precio){ toast('Complete nombre y precio','error'); return; }
   if(id){ const idx=ps.findIndex(x=>x.id===id); if(idx>=0) ps[idx]={...ps[idx],...data}; }
   else ps.push({id:uid(),...data,activo:true});
@@ -3173,6 +3224,7 @@ function buildModals(){
   document.getElementById('modals').innerHTML=`
   <div id="modal-recovery" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-lock')} Recuperar Contraseña</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-recovery')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2">Solicite al administrador el código de recuperación.</p><div class="form-group"><label>Código de recuperación</label><input type="text" id="rec-code" placeholder="4 dígitos" maxlength="4"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-recovery')">Cancelar</button><button class="btn btn-gold" onclick="doRecovery()">Continuar</button></div></div></div>
 
+  <div id="modal-receta-ver" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="receta-ver-title">${ic('i-chef')} Receta</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-receta-ver')">${ic('i-close')}</button></div><div class="modal-body" id="receta-ver-body"></div><div class="modal-footer"><button class="btn btn-gold" onclick="closeModal('modal-receta-ver')">Cerrar</button></div></div></div>
   <div id="modal-descuento" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:350px;"><div class="modal-header"><h3>${ic('i-tag')} Aplicar Descuento</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-descuento')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Tipo</label><select id="desc-tipo"><option value="pct">Porcentaje (%)</option><option value="fijo">Valor fijo (COP)</option></select></div><div class="form-group"><label>Valor</label><input type="number" id="desc-valor" placeholder="0" min="0"></div><div class="form-group"><label>Motivo</label><input type="text" id="desc-motivo" placeholder="Razón"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-descuento')">Cancelar</button><button class="btn btn-gold" onclick="applyDescuento()">Aplicar</button></div></div></div>
 
   <div id="modal-caja" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Apertura de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-caja')">${ic('i-close')}</button></div><div class="modal-body"><div class="form-group"><label>Fondo Inicial (COP)</label><input type="number" id="caja-fondo" value="100000"><p class="text-xs text-gray mt-1" id="caja-base-aviso"></p></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-caja')">Cancelar</button><button class="btn btn-gold" onclick="abrirCaja()">Abrir Caja</button></div></div></div>
@@ -3227,7 +3279,16 @@ function buildModals(){
 
   <div id="modal-usuario" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-usuario-title">${ic('i-users')} Nuevo Usuario</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-usuario')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-uid"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="u-nombre"></div><div class="form-group"><label>Usuario</label><input type="text" id="u-usuario"></div><div class="form-group"><label>Contraseña</label><input type="password" id="u-pass"></div><div class="form-group"><label>Rol</label><select id="u-rol"><option value="admin">Administrador</option><option value="dueño">Dueño</option><option value="jefe">Jefe</option><option value="supervisor">Supervisor</option><option value="cajero" selected>Cajero</option><option value="mesero">Mesero</option><option value="cocina">Cocina</option></select></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button><button class="btn btn-gold" onclick="saveUsuario()">Guardar</button></div></div></div>
 
-  <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Entremeses</option><option>Chowfan</option><option>Chopsuey</option><option>Lomein</option><option>Platos Combinados</option><option>Costillas</option><option>Pollo</option><option>Platos Personales</option><option>Combos Familiares</option><option>Bebidas</option><option>Promo del Mes</option><option>Adicionales</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
+  <div id="modal-producto" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-prod-title">${ic('i-menu-food')} Nuevo Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-producto')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-prod-id"><div class="form-grid-2"><div class="form-group"><label>Nombre</label><input type="text" id="p-nombre"></div><div class="form-group"><label>Precio (COP)</label><input type="number" id="p-precio"></div><div class="form-group"><label>Categoría</label><select id="p-cat"><option>Entremeses</option><option>Chowfan</option><option>Chopsuey</option><option>Lomein</option><option>Platos Combinados</option><option>Costillas</option><option>Pollo</option><option>Platos Personales</option><option>Combos Familiares</option><option>Bebidas</option><option>Promo del Mes</option><option>Adicionales</option></select></div><div class="form-group" style="grid-column:1/-1"><label>Descripción</label><input type="text" id="p-desc"></div></div>
+    <div class="form-group" style="grid-column:1/-1;margin-top:6px;"><label>${ic('i-chef')} Receta / Ingredientes (para cocina)</label>
+      <p class="text-xs text-gray" style="margin-bottom:8px;">Escribe cada ingrediente con sus gramos o medida. La cocina los verá al tocar el plato.</p>
+      <div id="receta-lista"></div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <input type="text" id="ing-nombre" placeholder="Ingrediente (ej: Arroz)" style="flex:2;min-width:130px;">
+        <input type="text" id="ing-cant" placeholder="Medida (ej: 150 g)" style="flex:1;min-width:100px;">
+        <button type="button" class="btn btn-primary btn-sm" onclick="agregarIngrediente()">${ic('i-plus')} Añadir</button>
+      </div>
+    </div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-producto')">Cancelar</button><button class="btn btn-gold" onclick="saveProducto()">Guardar</button></div></div></div>`;
 }
 
 // ========================= CLOCK / TIMERS =========================
