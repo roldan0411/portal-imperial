@@ -337,6 +337,7 @@ const NAV = [
   {id:'ventas',icon:'i-cart',label:'Nueva Venta',roles:['admin','cajero','supervisor','mesero','jefe']},
   {id:'pedidos',icon:'i-orders',label:'Pedidos',roles:['admin','cajero','supervisor','mesero','impresiones','jefe','dueño'],badge:'activos'},
   {id:'listos',icon:'i-ready',label:'Pedidos Listos',roles:['admin','cajero','supervisor','mesero','jefe'],badge:'listos'},
+  {id:'agendados',icon:'i-clock',label:'Pedidos Agendados',roles:['admin','cajero','supervisor','mesero','jefe','dueño'],badge:'agendados'},
   {sec:'Operaciones'},
   {id:'caja',icon:'i-cash',label:'Caja',roles:['admin','cajero','supervisor','jefe','dueño']},
   {id:'domicilios',icon:'i-delivery',label:'Domicilios',roles:['admin','cajero','supervisor','mesero','jefe']},
@@ -369,11 +370,12 @@ function buildSidebar(){
 function updateBadges(){
   const vs=DB.get('ventas')||[];
   const counts={
-    activos: vs.filter(v=>v.estado!=='anulada' && v.estadoPedido!=='entregado').length,
-    listos: vs.filter(v=>v.estadoCocina==='listo' && v.estadoPedido!=='entregado' && v.estado!=='anulada').length,
-    cocina: vs.filter(v=>v.estado!=='anulada' && v.estadoPedido!=='entregado' && v.estadoCocina!=='listo').length,
+    activos: vs.filter(v=>v.estado!=='anulada' && v.estado!=='agendado' && v.estadoPedido!=='entregado').length,
+    listos: vs.filter(v=>v.estadoCocina==='listo' && v.estadoPedido!=='entregado' && v.estado!=='anulada' && v.estado!=='agendado').length,
+    cocina: vs.filter(v=>v.estado!=='anulada' && v.estado!=='agendado' && v.estadoPedido!=='entregado' && v.estadoCocina!=='listo').length,
+    agendados: vs.filter(v=>v.estado==='agendado').length,
   };
-  ['activos','listos','cocina'].forEach(k=>{
+  ['activos','listos','cocina','agendados'].forEach(k=>{
     NAV.filter(n=>n.badge===k).forEach(n=>{
       const b=document.getElementById('badge-'+n.id);
       if(b){ if(counts[k]>0){ b.textContent=counts[k]; b.style.display='flex'; } else b.style.display='none'; }
@@ -384,7 +386,7 @@ function updateBadges(){
 // ========================= NAVIGATION =========================
 const PAGE_META={
   dashboard:['i-dashboard','Dashboard'], ventas:['i-cart','Nueva Venta'], pedidos:['i-orders','Pedidos'],
-  listos:['i-ready','Pedidos Listos'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
+  listos:['i-ready','Pedidos Listos'], agendados:['i-clock','Pedidos Agendados'], caja:['i-cash','Caja'], domicilios:['i-delivery','Domicilios'],
   cuadredomi:['i-delivery','Cuadre de Domiciliarios'],
   cocina:['i-chef','Pantalla de Cocina'], usuarios:['i-users','Usuarios'], historial:['i-history','Historial'],
   reportes:['i-report','Reportes'], contable:['i-report','Registro Contable Mensual'], gastosneg:['i-cash','Gastos del Negocio'], auditoria:['i-audit','Auditoría'], menu:['i-menu-food','Menú'], config:['i-settings','Configuración'],
@@ -399,7 +401,7 @@ function showPage(name){
   const m=PAGE_META[name]||['i-dashboard',name];
   document.getElementById('page-title').innerHTML=ic(m[0])+' '+m[1];
   document.getElementById('sidebar').classList.remove('open');
-  const fns={dashboard,ventas,pedidos,listos,caja,domicilios,cuadredomi,cocina,usuarios,historial,reportes,contable,gastosneg,auditoria,menu,config,asistencia,tiempos,impresiones};
+  const fns={dashboard,ventas,pedidos,listos,agendados,caja,domicilios,cuadredomi,cocina,usuarios,historial,reportes,contable,gastosneg,auditoria,menu,config,asistencia,tiempos,impresiones};
   document.getElementById('content').innerHTML = fns[name] ? fns[name]() : '<p class="text-gray">Página no encontrada.</p>';
   if(name==='ventas'){ ESCRIBIENDO=true; STATE.order=STATE.order||[]; renderTipoPedido(); renderOrderPanel(); }
   else { ESCRIBIENDO=false; }
@@ -528,7 +530,7 @@ function filterMenu(){
 
 function renderTipoPedido(){
   const tt=document.getElementById('tipo-toggle'); if(!tt) return;
-  const tipos=[['mesa','i-table','Mesa'],['llevar','i-bag','Llevar'],['domicilio','i-delivery','Domicilio']];
+  const tipos=[['mesa','i-table','Mesa'],['llevar','i-bag','Llevar'],['domicilio','i-delivery','Domicilio'],['agendar','i-clock','Agendar']];
   tt.innerHTML=tipos.map(([t,i,l])=>`<button class="btn btn-sm ${STATE.tipoPedido===t?'btn-gold':'btn-ghost'}" onclick="setTipoPedido('${t}')">${ic(i)} ${l}</button>`).join('');
   renderCamposTipo();
 }
@@ -550,9 +552,31 @@ function renderCamposTipo(){
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Dirección *" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value">
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
     <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`;
+  } else if(STATE.tipoPedido==='agendar'){
+    const cfg=DB.get('config')||{}; const nMesas=cfg.numMesas||25;
+    const sub=STATE.agSubTipo||'domicilio';
+    html=`<div style="background:rgba(212,175,55,0.08);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:8px;">${ic('i-clock')} FECHA Y HORA DEL PEDIDO *</div>
+      <input type="datetime-local" class="mini-input" style="margin-bottom:4px;" value="${escapeHtml(STATE.agFechaHora||'')}" oninput="STATE.agFechaHora=this.value">
+      <p class="text-xs text-gray" style="margin:2px 0 0;">A esta hora exacta el pedido se enviara solo a cocina y aparecera en Pedidos.</p>
+    </div>
+    <label class="text-xs text-gray" style="display:block;margin-bottom:4px;">Tipo de entrega</label>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+      ${[['mesa','Mesa'],['llevar','Llevar'],['domicilio','Domicilio']].map(([t,l])=>`<button class="btn btn-sm ${sub===t?'btn-gold':'btn-ghost'}" onclick="setAgSubTipo('${t}')">${l}</button>`).join('')}
+    </div>
+    ${sub==='mesa'?`<select class="mini-input" style="margin-bottom:8px;" onchange="STATE.mesa=this.value"><option value="">Seleccionar mesa...</option>${Array.from({length:nMesas},(_,i)=>`<option value="Mesa ${i+1}" ${STATE.mesa==='Mesa '+(i+1)?'selected':''}>Mesa ${i+1}</option>`).join('')}</select>`:''}
+    <input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Telefono ${sub==='mesa'?'':'*'} (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;sugerirClientes(this.value)">
+    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;sugerirClientes(this.value)">
+    <div id="cliente-sugerencias" style="display:none;background:var(--dark3);border:1px solid rgba(212,175,55,0.25);border-radius:8px;margin-bottom:8px;max-height:200px;overflow-y:auto;"></div>
+    ${sub==='domicilio'?`
+    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Direccion *" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value">
+    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
+    <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`:''}`;
   }
   c.innerHTML=html;
 }
+// Cambia el sub-tipo de entrega de un pedido AGENDADO (mesa / llevar / domicilio)
+function setAgSubTipo(t){ STATE.agSubTipo=t; if(t!=='domicilio'){ STATE.valorDom=0; } renderCamposTipo(); renderOrderPanel(); }
 // Muestra SUGERENCIAS de clientes (no rellena solo). El usuario hace clic para elegir.
 function sugerirClientes(texto, campo){
   const cont=document.getElementById('cliente-sugerencias');
@@ -618,7 +642,7 @@ function addToOrder(id){
 function removeFromOrder(id){ STATE.order=STATE.order.filter(x=>x.id!==id); renderOrderPanel(); }
 function changeQty(id,d){ const i=STATE.order.find(x=>x.id===id); if(i){ i.qty=Math.max(1,i.qty+d); renderOrderPanel(); } }
 function setItemObs(id,v){ const i=STATE.order.find(x=>x.id===id); if(i) i.obs=v; }
-function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.propina=0; STATE.recargo=0; STATE.metodoVenta='efectivo'; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null;
+function clearOrder(){ STATE.order=[]; STATE.descuento=0; STATE.descMot=''; STATE.cliNombre=''; STATE.cliTel=''; STATE.cliDir=''; STATE.cliBarrio=''; STATE.valorDom=0; STATE.propina=0; STATE.recargo=0; STATE.metodoVenta='efectivo'; STATE.mesa=''; STATE.orderObs=''; STATE.editandoVenta=null; STATE.agFechaHora=''; STATE.agSubTipo='domicilio';
   const o=document.getElementById('order-obs'); if(o)o.value=''; renderCamposTipo(); renderOrderPanel(); }
 
 function renderOrderPanel(){
@@ -642,7 +666,7 @@ function renderOrderPanel(){
       </div>
     </div>`).join('');
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
-  const dom=STATE.tipoPedido==='domicilio'?(STATE.valorDom||0):0;
+  const dom=(STATE.tipoPedido==='domicilio'||(STATE.tipoPedido==='agendar'&&STATE.agSubTipo==='domicilio'))?(STATE.valorDom||0):0;
   const desc=STATE.descuento||0;
   const total=Math.max(0,subtotal+dom-desc);
   sumEl.innerHTML=`
@@ -653,7 +677,10 @@ function renderOrderPanel(){
     <div class="flex-between mt-1 gap-2" style="flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-descuento')">${ic('i-tag')} Descuento</button>
     </div>
-    ${STATE.tipoPedido==='mesa'
+    ${STATE.tipoPedido==='agendar'
+      ? `<button class="btn btn-gold btn-block mt-1" onclick="agendarPedido()" style="font-size:14px;padding:12px;">${ic('i-clock')} ${STATE.editandoVenta?'Guardar Cambios del Agendado':'Agendar Pedido'}</button>
+         <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">Quedara guardado. A la hora exacta pasa solo a cocina y a Pedidos.</p>`
+      : STATE.tipoPedido==='mesa'
       ? `<button class="btn btn-gold btn-block mt-1" onclick="guardarMesa()" style="font-size:14px;padding:12px;">${ic('i-check')} ${STATE.editandoVenta?'Actualizar Mesa':'Abrir Mesa / Enviar a Cocina'}</button>
          <p class="text-xs text-gray" style="text-align:center;margin-top:6px;">La mesa queda abierta. Se cobra al final desde Pedidos.</p>`
       : (STATE.user.rol==='mesero'
@@ -1059,6 +1086,7 @@ function pedidos(){
   const cajaId=cajaActual?cajaActual.id:null;
   const vs=(DB.get('ventas')||[]).filter(v=>{
     if(v.estado==='anulada') return false;
+    if(v.estado==='agendado') return false; // los agendados tienen su propia pantalla hasta su hora
     // Los abiertos/por verificar se ven solo si son de la caja actual (evita pedidos pegados
     // de cajas ya cerradas). Si no hay caja abierta, no se muestran pedidos viejos.
     if(v.estado==='abierta' || v.estado==='por_verificar') return cajaId && v.cajaId===cajaId;
@@ -1444,8 +1472,188 @@ function listos(){
 
 // ========================= COCINA (KDS) =========================
 let ultimoCountCocina=-1;
+// ========================= PEDIDOS AGENDADOS =========================
+// Convierte el valor del input datetime-local (hora de Colombia) al instante real (UTC ISO).
+function fechaLocalAInstante(v){
+  // v = "2025-08-06T12:00" interpretado como hora de Colombia (UTC-5)
+  if(!v) return null;
+  const [f,h]=v.split('T'); if(!f||!h) return null;
+  const [Y,M,D]=f.split('-').map(Number); const [hh,mm]=h.split(':').map(Number);
+  // Instante UTC = hora Colombia + 5h
+  const ms=Date.UTC(Y,M-1,D,hh,mm,0) - COL_OFFSET_MS; // COL_OFFSET_MS es negativo
+  return new Date(ms).toISOString();
+}
+// Guarda un pedido AGENDADO. Pide todos los datos. No entra a cocina hasta su hora.
+function agendarPedido(){
+  if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
+  if(!STATE.agFechaHora){ toast('Indique la fecha y hora del pedido','error'); return; }
+  const instante = fechaLocalAInstante(STATE.agFechaHora);
+  if(!instante){ toast('Fecha u hora invalida','error'); return; }
+  if(new Date(instante).getTime() < ahoraMs()-60000){ toast('La hora ya paso. Elija una hora futura.','error'); return; }
+  const sub = STATE.agSubTipo||'domicilio';
+  // Validar datos segun el sub-tipo
+  if(!STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
+  if(sub==='mesa' && !STATE.mesa){ toast('Seleccione una mesa','error'); return; }
+  if(sub==='domicilio' && (!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio agendado requiere telefono y direccion','error'); return; }
+  if(sub==='llevar' && !STATE.cliTel){ toast('Indique el telefono del cliente','error'); return; }
+
+  const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
+  const dom=sub==='domicilio'?(STATE.valorDom||0):0;
+  const ventaReal=Math.max(0,subtotal-(STATE.descuento||0));
+  const vs=DB.get('ventas')||[];
+
+  if(STATE.editandoVenta){
+    const v=vs.find(x=>x.id===STATE.editandoVenta.id);
+    if(v){
+      v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
+      v.total=ventaReal; v.ventaReal=ventaReal; v.tipo=sub; v.mesa=sub==='mesa'?STATE.mesa:'';
+      v.cliNombre=STATE.cliNombre; v.cliTel=STATE.cliTel; v.cliDir=STATE.cliDir; v.cliBarrio=STATE.cliBarrio;
+      v.obs=STATE.orderObs; v.programadoPara=instante; v.modificadoPor=STATE.user.nombre; v.modificadoEn=now();
+      fusionarYGuardarVentas(vs);
+      guardarClienteSiAplica();
+      logAudit('Edito pedido agendado',`${STATE.cliNombre} para ${fmtDate(instante)}`);
+      toast('Pedido agendado actualizado','success');
+    }
+    clearOrder(); showPage('agendados'); return;
+  }
+
+  const venta={ id:uid(), factura:'', ordenCocina:null, fecha:now(), tipo:sub,
+    mesa: sub==='mesa'?STATE.mesa:'', cliNombre:STATE.cliNombre, cliTel:STATE.cliTel, cliDir:STATE.cliDir, cliBarrio:STATE.cliBarrio,
+    valorDom:dom, items:[...STATE.order], subtotal, descuento:STATE.descuento||0, descMot:STATE.descMot,
+    total:ventaReal, ventaReal, propina:0, recargo:0, totalCobrado:0,
+    metodo:'', estado:'agendado', estadoPedido:'agendado', estadoCocina:'pendiente', domiciliario:'',
+    programadoPara:instante, agendadoPor:STATE.user?.nombre,
+    obs:STATE.orderObs, cajero:'', atendidoPor:STATE.user?.nombre, atendidoRol:STATE.user?.rol,
+    cajaId:DB.get('caja_actual')?.id||null };
+  vs.unshift(venta); fusionarYGuardarVentas(vs);
+  guardarClienteSiAplica();
+  logAudit('Agendo pedido',`${STATE.cliNombre} para ${fmtDate(instante)}`);
+  clearOrder();
+  toast(`Pedido agendado para ${fmtDate(instante)}`,'success');
+  showPage('agendados');
+}
+// Libera un pedido agendado: lo pasa a cocina AHORA (automatico a su hora, o manual).
+function liberarAgendado(id, auto){
+  const vs=DB.get('ventas')||[];
+  const v=vs.find(x=>x.id===id);
+  if(!v || v.estado!=='agendado') return;
+  v.estado='abierta';
+  v.estadoPedido='activo';
+  v.estadoCocina='pendiente';
+  v.fecha=now();               // el timer de cocina arranca ahora
+  v.liberadoDeAgenda=true;
+  v.liberadoEn=now();
+  if(v.liberadoAuto===undefined) v.liberadoAuto=!!auto;
+  // Asignar orden de cocina si no es domicilio (igual que los pedidos normales)
+  if(v.tipo!=='domicilio' && !v.ordenCocina) v.ordenCocina=nextOrden();
+  // Asociar a la caja abierta actual para que aparezca en Pedidos
+  const cajaAct=DB.get('caja_actual'); if(cajaAct) v.cajaId=cajaAct.id;
+  fusionarYGuardarVentas(vs);
+  logAudit('Pedido agendado enviado a cocina', `${v.cliNombre||v.mesa} (${auto?'automatico':'manual'})`);
+  try{ notifyKitchen(); }catch(e){}
+  try{ printTicketCocina(v); }catch(e){}
+  updateBadges();
+  return v;
+}
+// Cancela (elimina) un pedido agendado antes de su hora.
+function cancelarAgendado(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id);
+  if(!v) return;
+  if(!confirm(`Cancelar el pedido agendado de ${v.cliNombre||v.mesa||'—'} para ${fmtDate(v.programadoPara)}?`)) return;
+  borrarVentaSegura(id);
+  logAudit('Cancelo pedido agendado', `${v.cliNombre||v.mesa} para ${fmtDate(v.programadoPara)}`);
+  toast('Pedido agendado cancelado','success');
+  showPage('agendados');
+}
+// Editar un pedido agendado (lo carga en la pantalla de venta)
+function editarAgendado(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id);
+  if(!v){ toast('No se encontro el pedido','error'); return; }
+  STATE.order=v.items.map(i=>({id:i.id,nombre:i.nombre,precio:i.precio,qty:i.qty,obs:i.obs||''}));
+  STATE.tipoPedido='agendar';
+  STATE.agSubTipo=v.tipo||'domicilio';
+  STATE.mesa=v.mesa||'';
+  STATE.cliNombre=v.cliNombre||''; STATE.cliTel=v.cliTel||''; STATE.cliDir=v.cliDir||''; STATE.cliBarrio=v.cliBarrio||'';
+  STATE.valorDom=v.valorDom||0; STATE.descuento=v.descuento||0; STATE.descMot=v.descMot||''; STATE.orderObs=v.obs||'';
+  // Convertir el instante guardado a valor datetime-local (hora Colombia)
+  const d=new Date(new Date(v.programadoPara).getTime()+COL_OFFSET_MS);
+  const pad=n=>String(n).padStart(2,'0');
+  STATE.agFechaHora=`${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  STATE.editandoVenta={id:v.id};
+  showPage('ventas');
+}
+// Revisa cada pocos segundos si algun pedido agendado ya llego a su hora.
+let _revisandoAgenda=false;
+function revisarAgendados(){
+  if(_revisandoAgenda) return;
+  const vs=DB.get('ventas')||[];
+  const listos=vs.filter(v=>v.estado==='agendado' && v.programadoPara && new Date(v.programadoPara).getTime()<=ahoraMs());
+  if(listos.length===0) return;
+  _revisandoAgenda=true;
+  try{
+    listos.forEach(v=>{ liberarAgendado(v.id, true); });
+    // Refrescar la pantalla si el usuario esta viendo agendados/pedidos/cocina
+    if(STATE.user && !ESCRIBIENDO && ['agendados','pedidos','cocina','listos'].includes(STATE.page)){
+      try{ showPage(STATE.page); }catch(e){}
+    }
+    if(listos.length===1){ toast(`Pedido agendado enviado a cocina: ${listos[0].cliNombre||listos[0].mesa||''}`,'info'); }
+    else { toast(`${listos.length} pedidos agendados enviados a cocina`,'info'); }
+  } finally { _revisandoAgenda=false; }
+}
+// Pagina: lista de pedidos agendados pendientes (aun no enviados a cocina)
+function agendados(){
+  const vs=(DB.get('ventas')||[]).filter(v=>v.estado==='agendado')
+    .sort((a,b)=> new Date(a.programadoPara)-new Date(b.programadoPara));
+  const filas = vs.map(v=>{
+    const ms=new Date(v.programadoPara).getTime();
+    const faltaMin=Math.round((ms-ahoraMs())/60000);
+    const cuando = faltaMin<=0 ? '<span class="badge badge-green">Enviando...</span>'
+      : faltaMin<60 ? `<span class="badge badge-orange">en ${faltaMin} min</span>`
+      : `<span class="badge badge-blue">en ${Math.floor(faltaMin/60)}h ${faltaMin%60}m</span>`;
+    const tipoTxt = v.tipo==='mesa'?('Mesa · '+escapeHtml(v.mesa||'')) : v.tipo==='domicilio'?'Domicilio':'Para llevar';
+    const puedeGestionar = ['admin','cajero','supervisor','jefe'].includes(STATE.user.rol);
+    return `<tr>
+      <td><span class="text-gold font-bold">${fmtDate(v.programadoPara)}</span><br>${cuando}</td>
+      <td>${tipoTxt}</td>
+      <td>${escapeHtml(v.cliNombre||'—')}${v.cliTel?`<br><span class="text-xs text-gray">${escapeHtml(v.cliTel)}</span>`:''}${v.cliDir?`<br><span class="text-xs text-gray">${ic('i-pin')} ${escapeHtml(v.cliDir)}${v.cliBarrio?' · '+escapeHtml(v.cliBarrio):''}</span>`:''}</td>
+      <td class="text-xs">${v.items.map(i=>`${i.qty}x ${escapeHtml(i.nombre)}`).join('<br>')}${v.obs?`<br><span class="text-orange">${ic('i-warning')} ${escapeHtml(v.obs)}</span>`:''}</td>
+      <td class="font-bold">${fmtMoney(v.total)}${v.valorDom?`<br><span class="text-xs text-gray">+ dom ${fmtMoney(v.valorDom)}</span>`:''}</td>
+      <td class="text-xs text-gray">${escapeHtml(v.agendadoPor||'—')}</td>
+      <td style="display:flex;gap:5px;flex-wrap:wrap;">
+        ${puedeGestionar?`<button class="btn btn-success btn-sm" onclick="liberarAgendadoManual('${v.id}')" title="Enviar a cocina ahora">${ic('i-chef')} Enviar ya</button>`:''}
+        ${puedeGestionar?`<button class="btn btn-ghost btn-sm" onclick="editarAgendado('${v.id}')" title="Editar">${ic('i-edit')}</button>`:''}
+        ${puedeGestionar?`<button class="btn btn-danger btn-sm" onclick="cancelarAgendado('${v.id}')" title="Cancelar">${ic('i-ban')}</button>`:''}
+      </td></tr>`;
+  }).join('');
+  return `<div class="card">
+    <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-clock')} Pedidos Agendados</div>
+      <button class="btn btn-primary btn-sm" onclick="irAAgendarNuevo()">${ic('i-plus')} Agendar nuevo</button></div>
+    <p class="text-sm text-gray" style="margin-bottom:14px;">Estos pedidos NO estan en cocina todavia. A la hora exacta programada, cada uno se envia solo a la pantalla de cocina y aparece en Pedidos. Tambien puede enviarlo antes con "Enviar ya".</p>
+    ${vs.length===0
+      ? `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos agendados</p></div>`
+      : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Programado</th><th>Tipo</th><th>Cliente</th><th>Pedido</th><th>Total</th><th>Agendo</th><th>Acciones</th></tr></thead><tbody>${filas}</tbody></table></div>`}
+  </div>`;
+}
+// Enviar a cocina AHORA de forma manual (con confirmacion)
+function liberarAgendadoManual(id){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===id);
+  if(!v) return;
+  if(!confirm(`Enviar a cocina AHORA el pedido de ${v.cliNombre||v.mesa||'—'}? (estaba programado para ${fmtDate(v.programadoPara)})`)) return;
+  liberarAgendado(id, false);
+  toast('Pedido enviado a cocina','success');
+  showPage('agendados');
+}
+// Ir a la pantalla de venta con el tipo Agendar ya seleccionado
+function irAAgendarNuevo(){
+  clearOrder();
+  STATE.tipoPedido='agendar';
+  STATE.agSubTipo='domicilio';
+  showPage('ventas');
+  setTimeout(()=>{ try{ renderTipoPedido(); renderCamposTipo(); }catch(e){} }, 50);
+}
+
 function cocina(){
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='entregado')
+  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.estado!=='agendado'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='entregado')
     .sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   // Detectar pedido NUEVO: si hay más pedidos que antes, sonar alarma fuerte
   const pendientes=vs.filter(v=>v.estadoCocina==='pendiente'||v.estadoCocina==='preparando').length;
@@ -3344,6 +3552,8 @@ function revisarLlamadoMesero(){
   if(maxTick>_ultimoLlamados) _ultimoLlamados=maxTick;
 }
 setInterval(revisarLlamadoMesero, 3000);
+// Revisa cada 20s si algun pedido AGENDADO llego a su hora, para enviarlo solo a cocina.
+setInterval(()=>{ try{ if(STATE.user) revisarAgendados(); }catch(e){} }, 20000);
 setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos'||STATE.page==='tiempos')){ showPage(STATE.page); } updateBadges(); },6000);
 let lastAct=Date.now();
 document.addEventListener('mousemove',()=>lastAct=Date.now());
@@ -3455,7 +3665,7 @@ function listenRealtime(){
         updateBadges();
       }
       // Si llegan ventas nuevas y este es el computador de impresión, imprimir lo pendiente
-      if(k==='ventas'){ try{ revisarColaImpresion(); }catch(e){} try{ procesarImpresionesPendientes(); }catch(e){} }
+      if(k==='ventas'){ try{ revisarColaImpresion(); }catch(e){} try{ procesarImpresionesPendientes(); }catch(e){} try{ revisarAgendados(); }catch(e){} }
     });
   });
 }
@@ -3472,7 +3682,7 @@ function revisarColaImpresion(){
   if(!cajaActual) return; // sin caja abierta no imprime nada pendiente
   // SOLO pedidos de la caja abierta y recientes (últimos 30 min). Evita bucles.
   const reciente = v => { return (ahoraMs()-new Date(v.fecha).getTime())/60000 < 30; };
-  const tickets=vs.filter(v=>v.estado!=='anulada' && v.cajaId===cajaActual.id && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
+  const tickets=vs.filter(v=>v.estado!=='anulada' && v.estado!=='agendado' && v.cajaId===cajaActual.id && !v.ticketImpreso && reciente(v)).map(v=>({v,tipo:'ticket'}));
   const facturas=vs.filter(v=>v.estado==='pagada' && !v.facturaImpresa && reciente(v)).map(v=>({v,tipo:'factura'}));
   const pendientes=[...tickets,...facturas];
   if(pendientes.length===0) return;
