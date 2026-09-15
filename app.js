@@ -122,6 +122,53 @@ const METODOS_PAGO = [['efectivo','Efectivo'],['banco','Banco'],['tarjeta','Tarj
 function opcionesMetodo(sel){ return METODOS_PAGO.map(([v,l])=>`<option value="${v}" ${sel===v?'selected':''}>${l}</option>`).join(''); }
 function nombreMetodo(m){ const f=METODOS_PAGO.find(x=>x[0]===m); return f?f[1]:(m||'—'); }
 
+// ===== CONCEPTOS DE GASTO: normalizar, agrupar y mostrar compacto =====
+function normConcepto(s){ return String(s||'').trim().replace(/\s+/g,' '); }
+function claveConcepto(s){ return normConcepto(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+// Suma al concepto sin duplicar por mayúsculas, tildes o espacios ("arriendo " = "Arriendo")
+function acumConcepto(obj, nombre, monto){
+  const n=normConcepto(nombre)||'Otros'; const k=claveConcepto(n);
+  const ex=Object.keys(obj).find(x=>claveConcepto(x)===k)||n;
+  obj[ex]=(obj[ex]||0)+(monto||0);
+}
+window._ccOpen = window._ccOpen || {};
+// Lista compacta: muestra los N conceptos más grandes con barra y %, el resto plegado con scroll
+function conceptosCompactoHTML(obj, opts){
+  opts=opts||{};
+  const arr=Object.entries(obj||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  if(!arr.length) return `<p class="text-gray text-xs" style="margin:4px 0 10px;">${opts.vacio||'Sin gastos.'}</p>`;
+  const total=arr.reduce((a,[,v])=>a+v,0);
+  const max=opts.max||5;
+  const fila=([k,v])=>{ const pct=total>0?Math.round(v/total*100):0;
+    return `<div class="cc-row"><div class="cc-top"><span class="cc-name" title="${escapeHtml(k)}">${escapeHtml(k)}</span><span class="cc-val">${fmtMoney(v)}<small>${pct}%</small></span></div><div class="cc-bar"><i style="width:${Math.max(pct,2)}%"></i></div></div>`; };
+  const vis=arr.slice(0,max), resto=arr.slice(max);
+  let html=`<div class="cc-list">${vis.map(fila).join('')}`;
+  if(resto.length){
+    const sumResto=resto.reduce((a,[,v])=>a+v,0); const id=opts.id||'cc';
+    html+=`<details class="cc-more" ${window._ccOpen[id]?'open':''} ontoggle="window._ccOpen['${id}']=this.open"><summary>Ver ${resto.length} concepto(s) más · ${fmtMoney(sumResto)}</summary><div class="cc-scroll">${resto.map(fila).join('')}</div></details>`;
+  }
+  return html+'</div>';
+}
+// Catálogo de conceptos de gastos del negocio (se agregan una vez y luego solo se seleccionan)
+const CONCEPTOS_GASTO_BASE=['Arriendo','Servicios públicos','Recibo de luz','Recibo de agua','Recibo de gas','Internet/Teléfono','Materia prima','Insumos','Nómina','Mantenimiento','Impuestos','Publicidad','Otros'];
+function getConceptosGasto(){
+  let base=DB.get('conceptos_gasto');
+  if(!Array.isArray(base)){
+    // Primera vez: lista base + los conceptos que ya se habían escrito antes
+    base=[...CONCEPTOS_GASTO_BASE, ...(DB.get('gastos_negocio')||[]).map(g=>g.concepto)];
+  }
+  const out=[];
+  base.forEach(c=>{ const n=normConcepto(c); if(n && !out.some(x=>claveConcepto(x)===claveConcepto(n))) out.push(n); });
+  return out.sort((a,b)=>a.localeCompare(b,'es'));
+}
+// ¿El usuario está llenando el formulario de gastos? (para que la sincronización no le borre lo escrito)
+function formularioEnUso(){
+  if(STATE.page!=='gastosneg') return false;
+  const a=document.activeElement;
+  if(a && ['INPUT','SELECT','TEXTAREA'].includes(a.tagName) && document.getElementById('content')?.contains(a)) return true;
+  return ['gn-valor','gn-factura','gn-nota','gn-nuevo-concepto-txt'].some(id=>(document.getElementById(id)?.value||'').trim()!=='');
+}
+
 function nextFactura(){ const n=(DB.get('factura_seq')||0)+1; DB.set('factura_seq',n); return 'PI-'+String(n).padStart(6,'0'); }
 // Número de orden para cocina, se reinicia cada día (#001, #002...)
 function nextOrden(){
@@ -502,7 +549,7 @@ function ventas(){
     </div>
     <div class="order-panel">
       <div class="order-head">
-        <div class="flex-between mb-2"><span class="card-title" style="margin:0;">${ic('i-cart')} ${editing?'Editar '+editing.factura:'Pedido'}</span><button class="btn btn-ghost btn-sm" onclick="clearOrder()">${ic('i-trash')}</button></div>
+        <div class="flex-between mb-2"><span class="card-title" style="margin:0;">${ic('i-cart')} ${editing?(editing.esAgendado?'Editar agendado':'Editar '+(editing.factura||refPedido(editing))):'Pedido'}</span><button class="btn btn-ghost btn-sm" onclick="clearOrder()">${ic('i-trash')}</button></div>
         <div class="tipo-toggle" id="tipo-toggle"></div>
         <div id="campos-tipo"></div>
         <input type="text" placeholder="Observaciones del pedido..." id="order-obs" class="mini-input" oninput="STATE.orderObs=this.value" value="${escapeHtml(STATE.orderObs)}">
@@ -534,7 +581,21 @@ function renderTipoPedido(){
   tt.innerHTML=tipos.map(([t,i,l])=>`<button class="btn btn-sm ${STATE.tipoPedido===t?'btn-gold':'btn-ghost'}" onclick="setTipoPedido('${t}')">${ic(i)} ${l}</button>`).join('');
   renderCamposTipo();
 }
-function setTipoPedido(t){ STATE.tipoPedido=t; renderTipoPedido(); }
+function setTipoPedido(t){
+  if(t===STATE.tipoPedido){ if(t==='agendar') abrirModalAgenda(); return; }
+  const ed=STATE.editandoVenta;
+  // Editando un AGENDADO y se cambia a otro tipo: salir de la edición (si no, se dañaría el pedido)
+  if(ed && ed.esAgendado && t!=='agendar'){
+    if(!confirm('Está editando un pedido agendado. ¿Salir de la edición sin guardar?')) return;
+    clearOrder();
+  }
+  // Editando una venta normal: no se puede convertir en agendado
+  if(ed && !ed.esAgendado && t==='agendar'){ toast('Termine o cancele la edición antes de agendar','error'); return; }
+  if(t==='agendar' && STATE.tipoPedido!=='agendar') STATE.tipoAntesAgenda=STATE.tipoPedido;
+  if(t!=='agendar'){ const b=document.getElementById('agenda-body'); if(b) b.innerHTML=''; }
+  STATE.tipoPedido=t; renderTipoPedido();
+  if(t==='agendar' && !agendaCompleta().ok) setTimeout(abrirModalAgenda,60);
+}
 function renderCamposTipo(){
   const c=document.getElementById('campos-tipo'); if(!c) return;
   const cfg=DB.get('config')||{}; const nMesas=cfg.numMesas||25;
@@ -553,30 +614,128 @@ function renderCamposTipo(){
     <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
     <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`;
   } else if(STATE.tipoPedido==='agendar'){
-    const cfg=DB.get('config')||{}; const nMesas=cfg.numMesas||25;
-    const sub=STATE.agSubTipo||'domicilio';
-    html=`<div style="background:rgba(212,175,55,0.08);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
-      <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:8px;">${ic('i-clock')} FECHA Y HORA DEL PEDIDO *</div>
-      <input type="datetime-local" class="mini-input" style="margin-bottom:4px;" value="${escapeHtml(STATE.agFechaHora||'')}" oninput="STATE.agFechaHora=this.value">
-      <p class="text-xs text-gray" style="margin:2px 0 0;">A esta hora exacta el pedido se enviara solo a cocina y aparecera en Pedidos.</p>
-    </div>
-    <label class="text-xs text-gray" style="display:block;margin-bottom:4px;">Tipo de entrega</label>
-    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-      ${[['mesa','Mesa'],['llevar','Llevar'],['domicilio','Domicilio']].map(([t,l])=>`<button class="btn btn-sm ${sub===t?'btn-gold':'btn-ghost'}" onclick="setAgSubTipo('${t}')">${l}</button>`).join('')}
-    </div>
-    ${sub==='mesa'?`<select class="mini-input" style="margin-bottom:8px;" onchange="STATE.mesa=this.value"><option value="">Seleccionar mesa...</option>${Array.from({length:nMesas},(_,i)=>`<option value="Mesa ${i+1}" ${STATE.mesa==='Mesa '+(i+1)?'selected':''}>Mesa ${i+1}</option>`).join('')}</select>`:''}
-    <input type="tel" class="mini-input" style="margin-bottom:6px;" placeholder="Telefono ${sub==='mesa'?'':'*'} (busca cliente)" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;sugerirClientes(this.value)">
-    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Nombre del cliente *" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;sugerirClientes(this.value)">
-    <div id="cliente-sugerencias" style="display:none;background:var(--dark3);border:1px solid rgba(212,175,55,0.25);border-radius:8px;margin-bottom:8px;max-height:200px;overflow-y:auto;"></div>
-    ${sub==='domicilio'?`
-    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Direccion *" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value">
-    <input type="text" class="mini-input" style="margin-bottom:6px;" placeholder="Barrio" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value">
-    <input type="number" class="mini-input" style="margin-bottom:8px;" placeholder="Valor domicilio *" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()">`:''}`;
+    html=agendaResumenHTML();
   }
   c.innerHTML=html;
 }
 // Cambia el sub-tipo de entrega de un pedido AGENDADO (mesa / llevar / domicilio)
-function setAgSubTipo(t){ STATE.agSubTipo=t; if(t!=='domicilio'){ STATE.valorDom=0; } renderCamposTipo(); renderOrderPanel(); }
+function setAgSubTipo(t){ STATE.agSubTipo=t; if(t!=='domicilio'){ STATE.valorDom=0; } renderAgendaModal(); renderCamposTipo(); renderOrderPanel(); }
+
+// ---------- AGENDAR: resumen compacto + modal de datos ----------
+function agSubLabel(t){ return {mesa:'Mesa',llevar:'Para llevar',domicilio:'Domicilio'}[t]||'Domicilio'; }
+// Hora de Colombia "ahora" como partes
+function agAhoraCol(){ return new Date(ahoraMs()+COL_OFFSET_MS); }
+function agFmtLocal(d){ const p=n=>String(n).padStart(2,'0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`; }
+// Qué le falta al agendado para poder guardarse
+function agendaCompleta(){
+  const sub=STATE.agSubTipo||'domicilio'; const f=[];
+  if(!STATE.agFechaHora) f.push('fecha y hora');
+  else { const ins=fechaLocalAInstante(STATE.agFechaHora); if(!ins) f.push('fecha válida'); else if(new Date(ins).getTime()<ahoraMs()-60000) f.push('hora futura'); }
+  if(!(STATE.cliNombre||'').trim()) f.push('nombre');
+  if(sub==='mesa' && !STATE.mesa) f.push('mesa');
+  if((sub==='domicilio'||sub==='llevar') && !(STATE.cliTel||'').trim()) f.push('teléfono');
+  if(sub==='domicilio' && !(STATE.cliDir||'').trim()) f.push('dirección');
+  return {ok:f.length===0, faltan:f};
+}
+function agCuandoTxt(){
+  if(!STATE.agFechaHora) return '';
+  const ins=fechaLocalAInstante(STATE.agFechaHora); if(!ins) return '';
+  const min=Math.round((new Date(ins).getTime()-ahoraMs())/60000);
+  if(min<-1) return '<span class="text-red">ya pasó</span>';
+  if(min<60) return `en ${Math.max(min,0)} min`;
+  const h=Math.floor(min/60), m=min%60;
+  if(h<24) return `en ${h}h ${m}m`;
+  return `en ${Math.floor(h/24)} día(s)`;
+}
+function agendaResumenHTML(){
+  const sub=STATE.agSubTipo||'domicilio'; const st=agendaCompleta();
+  const ins=STATE.agFechaHora?fechaLocalAInstante(STATE.agFechaHora):null;
+  const det=[STATE.cliNombre, STATE.cliTel, sub==='mesa'?STATE.mesa:'', sub==='domicilio'?STATE.cliDir:''].filter(Boolean).map(escapeHtml).join(' · ');
+  return `${STATE.editandoVenta&&STATE.editandoVenta.esAgendado?`<div class="ag-editando"><span style="display:flex;align-items:center;gap:5px;">${ic('i-edit')} Editando pedido agendado</span><button type="button" onclick="cancelarEdicionAgendado()">Cancelar edición</button></div>`:''}
+  <div class="ag-resumen ${st.ok?'':'ag-incompleto'}" onclick="abrirModalAgenda()" role="button" tabindex="0">
+    <div class="ag-res-top">
+      <span class="ag-res-fecha">${ic('i-clock')} ${ins?fmtDate(ins):'Sin fecha y hora'}</span>
+      <span class="badge badge-gold">${agSubLabel(sub)}</span>
+    </div>
+    <div class="ag-res-det">${det||'<span class="text-gray">Sin datos del cliente</span>'}</div>
+    <div class="ag-res-pie">
+      <span>${st.ok?`<span class="text-green">${ic('i-check')} Listo</span> · ${agCuandoTxt()}`:`<span class="text-orange">${ic('i-warning')} Falta: ${st.faltan.join(', ')}</span>`}</span>
+      <span class="ag-res-btn">${ic('i-edit')} ${st.ok?'Editar':'Completar'}</span>
+    </div>
+  </div>`;
+}
+function abrirModalAgenda(){ renderAgendaModal(); openModal('modal-agenda'); }
+function cerrarModalAgenda(){ closeModal('modal-agenda'); const b=document.getElementById('agenda-body'); if(b) b.innerHTML=''; renderCamposTipo(); renderOrderPanel(); }
+function agendaModalAbierto(){ const m=document.getElementById('modal-agenda'); return !!(m && m.style.display==='flex'); }
+function agSetFecha(){
+  const f=document.getElementById('ag-fecha')?.value, h=document.getElementById('ag-hora')?.value;
+  STATE.agFechaHora=(f&&h)?(f+'T'+h):'';
+  agActualizarEstado();
+}
+// Atajos: sumar minutos a la hora actual (redondeado a 5 min)
+function agRapidoMin(min){
+  const d=agAhoraCol(); d.setUTCMinutes(d.getUTCMinutes()+min); d.setUTCMinutes(Math.ceil(d.getUTCMinutes()/5)*5,0,0);
+  STATE.agFechaHora=agFmtLocal(d); renderAgendaModal();
+}
+// Atajos: hoy/mañana a una hora fija
+function agRapidoHora(hh,mm,dias){
+  const d=agAhoraCol(); d.setUTCDate(d.getUTCDate()+(dias||0)); d.setUTCHours(hh,mm,0,0);
+  STATE.agFechaHora=agFmtLocal(d); renderAgendaModal();
+}
+function agActualizarEstado(){
+  const st=agendaCompleta();
+  const e=document.getElementById('ag-estado');
+  if(e) e.innerHTML=st.ok?`<span class="text-green">${ic('i-check')} Todo listo · se envía a cocina ${agCuandoTxt()}</span>`:`<span class="text-orange">${ic('i-warning')} Falta: ${st.faltan.join(', ')}</span>`;
+  renderCamposTipo();
+}
+function renderAgendaModal(){
+  const body=document.getElementById('agenda-body'); if(!body) return;
+  const cfg=DB.get('config')||{}; const nMesas=cfg.numMesas||25;
+  const sub=STATE.agSubTipo||'domicilio';
+  const [fv,hv]=(STATE.agFechaHora||'').split('T');
+  const hoy=diaColombia();
+  const chip=(txt,fn)=>`<button type="button" class="ag-chip" onclick="${fn}">${txt}</button>`;
+  const req=b=>b?' <span class="text-red">*</span>':'';
+  body.innerHTML=`
+    <div class="ag-bloque">
+      <div class="ag-bloque-tit">${ic('i-clock')} ¿Para cuándo?</div>
+      <div class="form-grid-2">
+        <div class="form-group" style="margin-bottom:8px;"><label>Fecha *</label><input type="date" id="ag-fecha" min="${hoy}" value="${escapeHtml(fv||'')}" onchange="agSetFecha()"></div>
+        <div class="form-group" style="margin-bottom:8px;"><label>Hora *</label><input type="time" id="ag-hora" step="300" value="${escapeHtml(hv||'')}" onchange="agSetFecha()"></div>
+      </div>
+      <div class="ag-chips">
+        ${chip('+30 min','agRapidoMin(30)')}${chip('+1 hora','agRapidoMin(60)')}${chip('+2 horas','agRapidoMin(120)')}
+        ${chip('Hoy 12:00 m','agRapidoHora(12,0,0)')}${chip('Hoy 6:00 pm','agRapidoHora(18,0,0)')}${chip('Mañana 12:00 m','agRapidoHora(12,0,1)')}
+      </div>
+    </div>
+    <div class="ag-bloque">
+      <div class="ag-bloque-tit">${ic('i-delivery')} Tipo de entrega</div>
+      <div class="tipo-toggle" style="margin-bottom:0;">
+        ${[['mesa','i-table','Mesa'],['llevar','i-bag','Llevar'],['domicilio','i-delivery','Domicilio']].map(([t,i,l])=>`<button type="button" class="btn btn-sm ${sub===t?'btn-gold':'btn-ghost'}" onclick="setAgSubTipo('${t}')">${ic(i)} ${l}</button>`).join('')}
+      </div>
+    </div>
+    <div class="ag-bloque">
+      <div class="ag-bloque-tit">${ic('i-users')} Cliente</div>
+      ${sub==='mesa'?`<div class="form-group" style="margin-bottom:8px;"><label>Mesa *</label><select onchange="STATE.mesa=this.value;agActualizarEstado()"><option value="">Seleccionar mesa...</option>${Array.from({length:nMesas},(_,i)=>`<option value="Mesa ${i+1}" ${STATE.mesa==='Mesa '+(i+1)?'selected':''}>Mesa ${i+1}</option>`).join('')}</select></div>`:''}
+      <div class="form-grid-2">
+        <div class="form-group" style="margin-bottom:8px;"><label>Teléfono${req(sub!=='mesa')}</label><input type="tel" inputmode="tel" placeholder="Busca cliente" value="${escapeHtml(STATE.cliTel)}" oninput="STATE.cliTel=this.value;sugerirClientes(this.value);agActualizarEstado()"></div>
+        <div class="form-group" style="margin-bottom:8px;"><label>Nombre *</label><input type="text" placeholder="Nombre del cliente" value="${escapeHtml(STATE.cliNombre)}" oninput="STATE.cliNombre=this.value;sugerirClientes(this.value);agActualizarEstado()"></div>
+      </div>
+      <div id="cliente-sugerencias" style="display:none;background:var(--dark3);border:1px solid rgba(212,175,55,0.25);border-radius:8px;margin-bottom:8px;max-height:180px;overflow-y:auto;"></div>
+      ${sub==='domicilio'?`
+      <div class="form-group" style="margin-bottom:8px;"><label>Dirección *</label><input type="text" value="${escapeHtml(STATE.cliDir)}" oninput="STATE.cliDir=this.value;agActualizarEstado()"></div>
+      <div class="form-grid-2">
+        <div class="form-group" style="margin-bottom:8px;"><label>Barrio</label><input type="text" value="${escapeHtml(STATE.cliBarrio)}" oninput="STATE.cliBarrio=this.value"></div>
+        <div class="form-group" style="margin-bottom:8px;"><label>Valor domicilio</label><input type="number" inputmode="numeric" placeholder="0" value="${STATE.valorDom||''}" oninput="STATE.valorDom=parseFloat(this.value)||0;renderOrderPanel()"></div>
+      </div>`:''}
+    </div>
+    <div id="ag-estado" class="ag-estado"></div>`;
+  agActualizarEstado();
+}
+function cancelarEdicionAgendado(){
+  if(!confirm('¿Cancelar la edición? Los cambios no se guardarán.')) return;
+  clearOrder(); terminarAgenda(); showPage('agendados');
+}
 // Muestra SUGERENCIAS de clientes (no rellena solo). El usuario hace clic para elegir.
 function sugerirClientes(texto, campo){
   const cont=document.getElementById('cliente-sugerencias');
@@ -601,6 +760,7 @@ function seleccionarCliente(id){
   if(!cl) return;
   STATE.cliNombre=cl.nombre||''; STATE.cliTel=cl.tel||''; STATE.cliDir=cl.dir||''; STATE.cliBarrio=cl.barrio||'';
   const cont=document.getElementById('cliente-sugerencias'); if(cont){ cont.innerHTML=''; cont.style.display='none'; }
+  if(agendaModalAbierto()) renderAgendaModal();
   renderCamposTipo();
   toast('Cliente seleccionado: '+cl.nombre,'success');
 }
@@ -943,7 +1103,7 @@ function facturaHTML(v){
       </div>
     </div>
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;padding:8px 0;text-align:center;margin:6px 0;">
-      <div style="font-size:15px;letter-spacing:1px;color:#000;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'FACTURA DE VENTA'}</div>
+      <div style="font-size:15px;letter-spacing:1px;color:#000;font-weight:bold;">${esDom?'PEDIDO A DOMICILIO':'CUENTA DE COBRO'}</div>
       <div style="font-size:20px;font-weight:bold;letter-spacing:1px;margin-top:3px;">N° ${escapeHtml(String(numDoc))}</div>
     </div>
     <div style="font-size:14px;line-height:1.8;margin:8px 0;color:#000;">
@@ -1486,16 +1646,10 @@ function fechaLocalAInstante(v){
 // Guarda un pedido AGENDADO. Pide todos los datos. No entra a cocina hasta su hora.
 function agendarPedido(){
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
-  if(!STATE.agFechaHora){ toast('Indique la fecha y hora del pedido','error'); return; }
+  const st=agendaCompleta();
+  if(!st.ok){ toast('Falta: '+st.faltan.join(', '),'error'); abrirModalAgenda(); return; }
   const instante = fechaLocalAInstante(STATE.agFechaHora);
-  if(!instante){ toast('Fecha u hora invalida','error'); return; }
-  if(new Date(instante).getTime() < ahoraMs()-60000){ toast('La hora ya paso. Elija una hora futura.','error'); return; }
   const sub = STATE.agSubTipo||'domicilio';
-  // Validar datos segun el sub-tipo
-  if(!STATE.cliNombre){ toast('Indique el nombre del cliente','error'); return; }
-  if(sub==='mesa' && !STATE.mesa){ toast('Seleccione una mesa','error'); return; }
-  if(sub==='domicilio' && (!STATE.cliTel||!STATE.cliDir)){ toast('Domicilio agendado requiere telefono y direccion','error'); return; }
-  if(sub==='llevar' && !STATE.cliTel){ toast('Indique el telefono del cliente','error'); return; }
 
   const subtotal=STATE.order.reduce((a,i)=>a+i.precio*i.qty,0);
   const dom=sub==='domicilio'?(STATE.valorDom||0):0;
@@ -1504,6 +1658,10 @@ function agendarPedido(){
 
   if(STATE.editandoVenta){
     const v=vs.find(x=>x.id===STATE.editandoVenta.id);
+    if(!v || v.estado!=='agendado'){
+      toast('Ese pedido ya no está agendado (ya se envió a cocina o se canceló). No se guardaron cambios.','error');
+      clearOrder(); terminarAgenda(); showPage('agendados'); return;
+    }
     if(v){
       v.items=[...STATE.order]; v.subtotal=subtotal; v.valorDom=dom; v.descuento=STATE.descuento||0; v.descMot=STATE.descMot;
       v.total=ventaReal; v.ventaReal=ventaReal; v.tipo=sub; v.mesa=sub==='mesa'?STATE.mesa:'';
@@ -1514,7 +1672,7 @@ function agendarPedido(){
       logAudit('Edito pedido agendado',`${STATE.cliNombre} para ${fmtDate(instante)}`);
       toast('Pedido agendado actualizado','success');
     }
-    clearOrder(); showPage('agendados'); return;
+    clearOrder(); terminarAgenda(); showPage('agendados'); return;
   }
 
   const venta={ id:uid(), factura:'', ordenCocina:null, fecha:now(), tipo:sub,
@@ -1528,10 +1686,12 @@ function agendarPedido(){
   vs.unshift(venta); fusionarYGuardarVentas(vs);
   guardarClienteSiAplica();
   logAudit('Agendo pedido',`${STATE.cliNombre} para ${fmtDate(instante)}`);
-  clearOrder();
+  clearOrder(); terminarAgenda();
   toast(`Pedido agendado para ${fmtDate(instante)}`,'success');
   showPage('agendados');
 }
+// Al terminar de agendar, la próxima "Nueva Venta" vuelve al tipo normal (no se queda en Agendar)
+function terminarAgenda(){ STATE.tipoPedido=(STATE.tipoAntesAgenda&&STATE.tipoAntesAgenda!=='agendar')?STATE.tipoAntesAgenda:'mesa'; STATE.tipoAntesAgenda=null; }
 // Libera un pedido agendado: lo pasa a cocina AHORA (automatico a su hora, o manual).
 function liberarAgendado(id, auto){
   const vs=DB.get('ventas')||[];
@@ -1569,6 +1729,8 @@ function cancelarAgendado(id){
 function editarAgendado(id){
   const v=(DB.get('ventas')||[]).find(x=>x.id===id);
   if(!v){ toast('No se encontro el pedido','error'); return; }
+  if(STATE.editandoVenta && !STATE.editandoVenta.esAgendado){ toast('Termine o cancele la edición actual primero','error'); return; }
+  if(STATE.tipoPedido!=='agendar') STATE.tipoAntesAgenda=STATE.tipoPedido;
   STATE.order=v.items.map(i=>({id:i.id,nombre:i.nombre,precio:i.precio,qty:i.qty,obs:i.obs||''}));
   STATE.tipoPedido='agendar';
   STATE.agSubTipo=v.tipo||'domicilio';
@@ -1579,7 +1741,7 @@ function editarAgendado(id){
   const d=new Date(new Date(v.programadoPara).getTime()+COL_OFFSET_MS);
   const pad=n=>String(n).padStart(2,'0');
   STATE.agFechaHora=`${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-  STATE.editandoVenta={id:v.id};
+  STATE.editandoVenta={id:v.id, esAgendado:true};
   showPage('ventas');
 }
 // Revisa cada pocos segundos si algun pedido agendado ya llego a su hora.
@@ -1611,7 +1773,7 @@ function agendados(){
       : faltaMin<60 ? `<span class="badge badge-orange">en ${faltaMin} min</span>`
       : `<span class="badge badge-blue">en ${Math.floor(faltaMin/60)}h ${faltaMin%60}m</span>`;
     const tipoTxt = v.tipo==='mesa'?('Mesa · '+escapeHtml(v.mesa||'')) : v.tipo==='domicilio'?'Domicilio':'Para llevar';
-    const puedeGestionar = ['admin','cajero','supervisor','jefe'].includes(STATE.user.rol);
+    const puedeGestionar = ['admin','cajero','supervisor','jefe','dueño'].includes(STATE.user.rol);
     return `<tr>
       <td><span class="text-gold font-bold">${fmtDate(v.programadoPara)}</span><br>${cuando}</td>
       <td>${tipoTxt}</td>
@@ -1628,6 +1790,7 @@ function agendados(){
   return `<div class="card">
     <div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-clock')} Pedidos Agendados</div>
       <button class="btn btn-primary btn-sm" onclick="irAAgendarNuevo()">${ic('i-plus')} Agendar nuevo</button></div>
+    ${vs.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><span class="badge badge-gold">${vs.length} agendado(s)</span>${(()=>{ const hoyC=diaColombia(); const n=vs.filter(v=>diaColombia(new Date(v.programadoPara).getTime())===hoyC).length; return n?`<span class="badge badge-orange">${n} para hoy</span>`:''; })()}<span class="badge badge-blue">Próximo: ${fmtDate(vs[0].programadoPara)}</span></div>`:''}
     <p class="text-sm text-gray" style="margin-bottom:14px;">Estos pedidos NO estan en cocina todavia. A la hora exacta programada, cada uno se envia solo a la pantalla de cocina y aparece en Pedidos. Tambien puede enviarlo antes con "Enviar ya".</p>
     ${vs.length===0
       ? `<div class="empty-state">${ic('i-empty')}<p>No hay pedidos agendados</p></div>`
@@ -1645,11 +1808,13 @@ function liberarAgendadoManual(id){
 }
 // Ir a la pantalla de venta con el tipo Agendar ya seleccionado
 function irAAgendarNuevo(){
+  if(STATE.editandoVenta && !STATE.editandoVenta.esAgendado){ toast('Termine o cancele la edición actual primero','error'); return; }
+  if(STATE.tipoPedido!=='agendar') STATE.tipoAntesAgenda=STATE.tipoPedido;
   clearOrder();
   STATE.tipoPedido='agendar';
   STATE.agSubTipo='domicilio';
   showPage('ventas');
-  setTimeout(()=>{ try{ renderTipoPedido(); renderCamposTipo(); }catch(e){} }, 50);
+  setTimeout(()=>{ try{ renderTipoPedido(); if(document.getElementById('campos-tipo')) abrirModalAgenda(); }catch(e){} }, 60);
 }
 
 function cocina(){
@@ -2407,7 +2572,8 @@ function gastosneg(){
     .sort((a,b)=>new Date(b.fecha||b.creado)-new Date(a.fecha||a.creado));
   const totalMes=delMes.reduce((a,g)=>a+(g.valor||0),0);
   // Agrupar por concepto
-  const porConcepto={}; delMes.forEach(g=>{ const k=g.concepto||'Otros'; porConcepto[k]=(porConcepto[k]||0)+(g.valor||0); });
+  const porConcepto={}; delMes.forEach(g=>acumConcepto(porConcepto,g.concepto,g.valor));
+  const conceptos=getConceptosGasto();
   // Selector de meses
   const opcionesMes=[]; for(let i=0;i<12;i++){ const d=new Date(Date.UTC(anio,mesNum-1,1)); d.setUTCMonth(d.getUTCMonth()-i); const mk=d.toISOString().substring(0,7); const lbl=d.toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'}); opcionesMes.push(`<option value="${mk}" ${mk===mes?'selected':''}>${lbl}</option>`); }
   const hoy=diaColombia();
@@ -2422,10 +2588,19 @@ function gastosneg(){
     <div class="card">
       <div class="card-title">${ic('i-plus')} Registrar nuevo gasto</div>
       <div class="form-group"><label>Concepto *</label>
-        <input type="text" id="gn-concepto" placeholder="Ej: Arriendo, Recibo de luz, Materia prima..." list="gn-conceptos-list">
-        <datalist id="gn-conceptos-list">
-          <option value="Arriendo"><option value="Servicios públicos"><option value="Recibo de luz"><option value="Recibo de agua"><option value="Recibo de gas"><option value="Internet/Teléfono"><option value="Materia prima"><option value="Insumos"><option value="Nómina"><option value="Mantenimiento"><option value="Impuestos"><option value="Publicidad"><option value="Otros">
-        </datalist>
+        <div style="display:flex;gap:6px;">
+          <select id="gn-concepto" style="flex:1;min-width:0;">${opcionesConceptoGasto(conceptos,'')}</select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="toggleNuevoConcepto()" title="Agregar un concepto nuevo">${ic('i-plus')} Agregar concepto</button>
+        </div>
+        <div id="gn-nuevo-concepto" style="display:none;margin-top:8px;padding:10px;border:1px dashed rgba(212,175,55,0.3);border-radius:10px;">
+          <div class="text-xs text-gray" style="margin-bottom:6px;">Escríbalo una sola vez. Después solo lo selecciona de la lista.</div>
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="gn-nuevo-concepto-txt" placeholder="Ej: Gas, Desechables, Aseo..." maxlength="40" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarConceptoGasto();}">
+            <button type="button" class="btn btn-gold btn-sm" onclick="agregarConceptoGasto()">${ic('i-check')} Guardar</button>
+          </div>
+        </div>
+        <div style="margin-top:6px;"><button type="button" onclick="toggleGestionConceptos()" style="background:none;border:none;color:var(--gray3);font-size:11px;cursor:pointer;padding:0;text-decoration:underline;">Administrar conceptos (${conceptos.length})</button></div>
+        <div id="gn-gestion-conceptos" style="display:none;margin-top:8px;">${chipsConceptosGasto(conceptos)}</div>
       </div>
       <div class="form-grid-2">
         <div class="form-group"><label>Valor *</label><input type="number" inputmode="numeric" id="gn-valor" placeholder="0" oninput="document.getElementById('gn-valor-prev').textContent=this.value?fmtMoney(parseFloat(this.value)):''"><div class="text-xs text-gold" id="gn-valor-prev" style="margin-top:2px;"></div></div>
@@ -2449,8 +2624,8 @@ function gastosneg(){
         <div class="stat-value">${fmtMoney(totalMes)}</div>
         <div class="stat-sub">${delMes.length} gasto(s) este mes</div>
       </div>
-      <div class="card-title" style="font-size:11px;">Por concepto</div>
-      ${Object.entries(porConcepto).length>0?Object.entries(porConcepto).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="flex-between" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(v)}</strong></div>`).join(''):'<p class="text-gray text-sm">Sin gastos este mes.</p>'}
+      <div class="cc-sec"><span>Por concepto</span><span>${Object.keys(porConcepto).length} concepto(s)</span></div>
+      ${conceptosCompactoHTML(porConcepto,{id:'gn-mes',max:6,vacio:'Sin gastos este mes.'})}
     </div>
   </div>
 
@@ -2478,7 +2653,7 @@ function guardarGastoNegocio(){
   const factura=document.getElementById('gn-factura')?.value.trim();
   const metodo=document.getElementById('gn-metodo')?.value||'efectivo';
   const nota=document.getElementById('gn-nota')?.value.trim();
-  if(!concepto){ toast('Escriba el concepto del gasto','error'); return; }
+  if(!concepto){ toast('Seleccione el concepto del gasto (o agréguelo con "Agregar concepto")','error'); return; }
   if(valor<=0){ toast('Escriba un valor válido','error'); return; }
   if(!fecha){ toast('Seleccione la fecha','error'); return; }
   const gastos=DB.get('gastos_negocio')||[];
@@ -2486,6 +2661,50 @@ function guardarGastoNegocio(){
   DB.set('gastos_negocio',gastos);
   toast('Gasto registrado: '+fmtMoney(valor),'success');
   showPage('gastosneg');
+}
+function opcionesConceptoGasto(lista, sel){
+  return `<option value="">Seleccione un concepto...</option>`+lista.map(c=>`<option value="${escapeHtml(c)}" ${claveConcepto(c)===claveConcepto(sel)?'selected':''}>${escapeHtml(c)}</option>`).join('');
+}
+function chipsConceptosGasto(lista){
+  if(!lista.length) return '<p class="text-xs text-gray">No hay conceptos.</p>';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;">${lista.map(c=>`<span class="badge badge-gold" style="padding:4px 6px 4px 10px;">${escapeHtml(c)}<button type="button" onclick="eliminarConceptoGasto(this.dataset.c)" data-c="${escapeHtml(c)}" title="Quitar de la lista" style="background:none;border:none;color:#E74C3C;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;">×</button></span>`).join('')}</div>
+  <p class="text-xs text-gray" style="margin-top:6px;">Quitar un concepto no borra los gastos ya registrados con él.</p>`;
+}
+// Refresca el selector y los chips SIN recargar la página (no se pierde lo escrito en el formulario)
+function refrescarSelectorConceptos(seleccionar){
+  const lista=getConceptosGasto();
+  const sel=document.getElementById('gn-concepto');
+  if(sel){ const actual=seleccionar!==undefined?seleccionar:sel.value; sel.innerHTML=opcionesConceptoGasto(lista,actual); }
+  const g=document.getElementById('gn-gestion-conceptos'); if(g) g.innerHTML=chipsConceptosGasto(lista);
+  const b=document.querySelector('[onclick="toggleGestionConceptos()"]'); if(b) b.textContent=`Administrar conceptos (${lista.length})`;
+}
+function toggleNuevoConcepto(){
+  const w=document.getElementById('gn-nuevo-concepto'); if(!w) return;
+  const abrir=w.style.display==='none';
+  w.style.display=abrir?'block':'none';
+  if(abrir) setTimeout(()=>document.getElementById('gn-nuevo-concepto-txt')?.focus(),30);
+}
+function toggleGestionConceptos(){ const w=document.getElementById('gn-gestion-conceptos'); if(w) w.style.display=w.style.display==='none'?'block':'none'; }
+function agregarConceptoGasto(){
+  const inp=document.getElementById('gn-nuevo-concepto-txt');
+  const n=normConcepto(inp?.value);
+  if(!n){ toast('Escriba el nombre del concepto','error'); return; }
+  const lista=getConceptosGasto();
+  const ex=lista.find(x=>claveConcepto(x)===claveConcepto(n));
+  if(ex){ toast(`"${ex}" ya existe, quedó seleccionado`,'info'); }
+  else { lista.push(n); DB.set('conceptos_gasto',lista); logAudit('Agregó concepto de gasto',n); toast('Concepto agregado: '+n,'success'); }
+  if(inp) inp.value='';
+  document.getElementById('gn-nuevo-concepto').style.display='none';
+  refrescarSelectorConceptos(ex||n);
+}
+function eliminarConceptoGasto(nombre){
+  if(!nombre) return;
+  if(!confirm(`¿Quitar "${nombre}" de la lista de conceptos?`)) return;
+  const lista=getConceptosGasto().filter(x=>claveConcepto(x)!==claveConcepto(nombre));
+  DB.set('conceptos_gasto',lista);
+  logAudit('Quitó concepto de gasto',nombre);
+  toast('Concepto quitado','info');
+  refrescarSelectorConceptos();
 }
 function eliminarGastoNegocio(id){
   if(!confirm('¿Eliminar este gasto?')) return;
@@ -2549,8 +2768,8 @@ function contable(){
     const ref=c.cierre||c.apertura;
     if(!ref || diaColombia(new Date(ref).getTime()).substring(0,7)!==mes) return;
     (c.movimientos||[]).forEach(m=>{
-      if(m.tipo==='nomina'){ nomina+=m.monto; const k='Nómina'; gastosPorConcepto[k]=(gastosPorConcepto[k]||0)+m.monto; }
-      else if(m.tipo==='salida'||m.tipo==='gasto'){ gastos+=m.monto; const k=m.concepto||m.motivo||'Otros gastos'; gastosPorConcepto[k]=(gastosPorConcepto[k]||0)+m.monto; }
+      if(m.tipo==='nomina'){ nomina+=m.monto; acumConcepto(gastosPorConcepto,'Nómina',m.monto); }
+      else if(m.tipo==='salida'||m.tipo==='gasto'){ gastos+=m.monto; acumConcepto(gastosPorConcepto,m.concepto||m.motivo||'Otros gastos',m.monto); }
       else if(m.tipo==='retiro'){ retiros+=m.monto; }
     });
   });
@@ -2562,7 +2781,7 @@ function contable(){
   const gastosNeg=(DB.get('gastos_negocio')||[]).filter(g=>(g.fecha||g.creado||'').substring(0,7)===mes);
   const totalGastosNeg=gastosNeg.reduce((a,g)=>a+(g.valor||0),0);
   const gastosNegPorConcepto={};
-  gastosNeg.forEach(g=>{ const k=g.concepto||'Otros'; gastosNegPorConcepto[k]=(gastosNegPorConcepto[k]||0)+(g.valor||0); });
+  gastosNeg.forEach(g=>acumConcepto(gastosNegPorConcepto,g.concepto,g.valor));
 
   // GASTOS TOTALES (lo que de verdad se gastó) = gastos de caja + gastos del negocio.
   // Los RETIROS NO son gasto: son dinero que el jefe saca (sigue siendo del negocio).
@@ -2631,9 +2850,10 @@ function contable(){
     </div>
     <div class="card">
       <div class="card-title">${ic('i-cash')} Egresos por concepto (lo que se gastó)</div>
-      <div class="text-xs text-gray" style="margin-bottom:4px;">De la caja diaria:</div>
-      ${Object.entries(gastosPorConcepto).length>0?Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join(''):'<p class="text-gray text-xs">Sin gastos de caja este mes.</p>'}
-      ${Object.entries(gastosNegPorConcepto).length>0?`<div class="text-xs text-gray" style="margin:8px 0 4px;">Gastos del negocio (arriendo, recibos, etc.):</div>${Object.entries(gastosNegPorConcepto).sort((a,b)=>b[1]-a[1]).map(([k,val])=>`<div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>${escapeHtml(k)}</span><strong class="text-red">${fmtMoney(val)}</strong></div>`).join('')}`:''}
+      <div class="cc-sec"><span>De la caja diaria</span><span>${fmtMoney(gastosCaja)}</span></div>
+      ${conceptosCompactoHTML(gastosPorConcepto,{id:'ct-caja',max:4,vacio:'Sin gastos de caja este mes.'})}
+      <div class="cc-sec" style="margin-top:14px;"><span>Gastos del negocio</span><span>${fmtMoney(totalGastosNeg)}</span></div>
+      ${conceptosCompactoHTML(gastosNegPorConcepto,{id:'ct-neg',max:5,vacio:'Sin gastos del negocio este mes.'})}
       <div class="flex-between" style="padding:10px 0;border-top:2px solid rgba(192,57,43,0.2);margin-top:6px;font-size:16px;"><span class="font-bold">TOTAL GASTOS</span><strong class="text-red">${fmtMoney(totalEgresos)}</strong></div>
       ${totalSalidasEfectivo>0?`<div class="flex-between" style="padding:10px 0;border-top:1px dashed rgba(255,255,255,0.15);margin-top:8px;"><span>${ic('i-cash')} Salida de efectivo (dinero que sacó el jefe)</span><strong style="color:var(--blue-l)">${fmtMoney(totalSalidasEfectivo)}</strong></div>${retiros>0?`<div class="flex-between" style="padding:3px 0;"><span class="text-xs text-gray">↳ retiros durante el día (caja abierta)</span><span class="text-xs" style="color:var(--blue-l)">${fmtMoney(retiros)}</span></div>`:''}${totalRetirosCerrada>0?`<div class="flex-between" style="padding:3px 0;"><span class="text-xs text-gray">↳ retiros después de cerrar caja</span><span class="text-xs" style="color:var(--blue-l)">${fmtMoney(totalRetirosCerrada)}</span></div>`:''}<p class="text-xs text-gray" style="margin-top:4px;">NO es un gasto: es dinero del negocio que el jefe sacó. Se informa para tener contabilidad clara, pero no reduce la ganancia.</p>`:''}
     </div>
@@ -3429,6 +3649,7 @@ function eliminarMarcacion(id){
 // ========================= MODALS HTML =========================
 function buildModals(){
   document.getElementById('modals').innerHTML=`
+  <div id="modal-agenda" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:520px;"><div class="modal-header"><h3>${ic('i-clock')} Datos del Pedido Agendado</h3><button class="btn btn-icon btn-ghost" onclick="cerrarModalAgenda()">${ic('i-close')}</button></div><div class="modal-body" id="agenda-body"></div><div class="modal-footer"><button class="btn btn-gold" onclick="cerrarModalAgenda()">${ic('i-check')} Listo, seguir con el pedido</button></div></div></div>
   <div id="modal-recovery" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-lock')} Recuperar Contraseña</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-recovery')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2">Solicite al administrador el código de recuperación.</p><div class="form-group"><label>Código de recuperación</label><input type="text" id="rec-code" placeholder="4 dígitos" maxlength="4"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-recovery')">Cancelar</button><button class="btn btn-gold" onclick="doRecovery()">Continuar</button></div></div></div>
 
   <div id="modal-receta-ver" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="receta-ver-title">${ic('i-chef')} Receta</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-receta-ver')">${ic('i-close')}</button></div><div class="modal-body" id="receta-ver-body"></div><div class="modal-footer"><button class="btn btn-gold" onclick="closeModal('modal-receta-ver')">Cerrar</button></div></div></div>
@@ -3562,7 +3783,7 @@ document.addEventListener('touchstart',()=>lastAct=Date.now());
 setInterval(()=>{ if(STATE.user && Date.now()-lastAct>30*60*1000){ toast('Sesión cerrada por inactividad'); doLogout(); }},60000);
 
 // ========================= BOOT con FIREBASE =========================
-const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones','gastos_negocio'];
+const FIREBASE_KEYS = ['usuarios','productos','ventas','clientes','cierres','auditoria','domiciliarios','caja_actual','factura_seq','config','empleados','marcaciones','gastos_negocio','conceptos_gasto'];
 
 function showConexion(estado){
   let el=document.getElementById('fb-status');
@@ -3650,7 +3871,7 @@ function listenRealtime(){
         CACHE[k] = (v===undefined? null : v);
         try { localStorage.setItem('pi_'+k, JSON.stringify(CACHE[k])); } catch(e){}
         if(STATE.user && !ESCRIBIENDO){
-          if(STATE.page!=='ventas'){ try{ showPage(STATE.page); }catch(e){} }
+          if(STATE.page!=='ventas'){ if(!formularioEnUso()){ try{ showPage(STATE.page); }catch(e){} } }
           else { try{ showPage('ventas'); }catch(e){} } // refrescar ventas para mostrar/ocultar bloqueo de caja
           updateBadges();
         }
@@ -3661,7 +3882,7 @@ function listenRealtime(){
       try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
       // Si el usuario está dentro y NO está escribiendo una venta, refrescar la pantalla
       if(STATE.user && !ESCRIBIENDO){
-        if(STATE.page!=='ventas'){ try{ showPage(STATE.page); }catch(e){} }
+        if(STATE.page!=='ventas' && !formularioEnUso()){ try{ showPage(STATE.page); }catch(e){} }
         updateBadges();
       }
       // Si llegan ventas nuevas y este es el computador de impresión, imprimir lo pendiente
