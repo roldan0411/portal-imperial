@@ -336,6 +336,76 @@ function toast(msg,type='info'){
   if(type==='success') sonidoExito(); else if(type==='error') sonidoError();
 }
 function openModal(id){ const m=document.getElementById(id); if(m) m.style.display='flex'; }
+// ===================== TABLAS → TARJETAS EN CELULAR =====================
+// En celular cada fila de tabla se ve como una tarjeta: sin scroll de lado, solo lo importante
+// y los botones a la vista. En PC la tabla se ve igual que siempre.
+// Columnas secundarias que se ocultan en celular, según la primera columna de cada tabla.
+const TC_OCULTAR = {
+  'Pedido':['Método','Subtotal','Desc.','Tipo'],        // dashboard / historial / impresiones
+  'Pedido / Mensajero':[],
+  'Programado':['Agendo'],
+  'Día':['Fondo','Hora cierre'],                          // cierres de caja
+  'Tipo':['Usuario'],                                     // movimientos de caja
+  'Nombre':['Pedidos','Código','Usuario'],                // clientes / usuarios / empleados
+  'Factura':['Hora'],                                     // cuadre domi
+  'Fecha':['N° Factura'],                                 // gastos del negocio
+  'Empleado':[],
+  'Usuario':[],
+  'Mensajero':[]
+};
+const TC_ACCIONES = ['Acciones','','Corregir','Reimprimir'];
+function prepararTablasMovil(raiz){
+  (raiz||document).querySelectorAll('table.data-table:not([data-tc])').forEach(t=>{
+    t.setAttribute('data-tc','1');
+    const ths=[...t.querySelectorAll('thead th')].map(th=>th.textContent.trim());
+    if(ths.length<4) return;                              // tablas pequeñas ya caben
+    t.classList.add('tc');
+    const ocultar=TC_OCULTAR[ths[0]]||[];
+    t.querySelectorAll('tbody tr').forEach(tr=>{
+      const tds=[...tr.children];
+      if(tds.length===1 || tds.some(td=>td.colSpan>1)){ tr.classList.add(tds.length===1?'tc-solo':'tc-sub'); return; }
+      tds.forEach((td,i)=>{
+        const lab=ths[i]||'';
+        const esAccion = i===tds.length-1 && (TC_ACCIONES.includes(lab) || td.querySelector('button'));
+        if(esAccion){ td.classList.add('tc-actions');
+          // Botones de solo ícono: nombre corto visible en celular (sale del title)
+          td.querySelectorAll('button:not([title])').forEach(bt=>{
+            if(bt.textContent.trim()) return;
+            const u=bt.querySelector('use')?.getAttribute('href')||'';
+            const m={'#i-print':'Recibo','#i-close':'Eliminar','#i-trash':'Eliminar','#i-edit':'Editar','#i-eye':'Ver'}[u];
+            if(m) bt.setAttribute('data-corto',m);
+          });
+          td.querySelectorAll('button[title]').forEach(bt=>{
+            const txt=bt.textContent.replace(/[−✎\s]/g,'');
+            if(txt.length>0) return;
+            const t=bt.title.toLowerCase();
+            const corto = t.includes('comanda')?'Comanda' : t.startsWith('reimprimir')?'Recibo' : t.startsWith('eliminar')?'Eliminar'
+              : t.includes('forma de pago')?'Pago' : t.startsWith('quitar')?'Quitar' : bt.title.replace(/\(.*?\)/g,'').trim().split(' ')[0];
+            bt.setAttribute('data-corto',corto);
+          });
+          return; }
+        if(i===0){ td.classList.add('tc-title'); return; }
+        td.setAttribute('data-label',lab);
+        if(ocultar.includes(lab)) td.classList.add('tc-hide');
+        const txt=td.textContent.trim();
+        if((txt==='' || txt==='—') && !td.querySelector('select,input,button')) td.classList.add('tc-vacio');
+        if(!td.querySelector(':scope > .tc-v')){
+          const w=document.createElement('div'); w.className='tc-v';
+          while(td.firstChild) w.appendChild(td.firstChild);
+          td.appendChild(w);
+        }
+      });
+    });
+  });
+}
+(function(){
+  let pend=false;
+  const run=()=>{ pend=false; try{ prepararTablasMovil(document); }catch(e){} };
+  const obs=new MutationObserver(()=>{ if(!pend){ pend=true; requestAnimationFrame(run); } });
+  document.addEventListener('DOMContentLoaded',()=>obs.observe(document.body,{childList:true,subtree:true}));
+  if(document.body) obs.observe(document.body,{childList:true,subtree:true});
+})();
+
 function closeModal(id){ const m=document.getElementById(id); if(m) m.style.display='none';
   // Si llegaron cambios mientras la ventana estaba abierta, refrescar ahora
   if(window._refrescoPendiente && !modalAbierto()){ window._refrescoPendiente=false;
@@ -2742,8 +2812,8 @@ function gastosneg(){
     <div class="card">
       <div class="card-title">${ic('i-plus')} Registrar nuevo gasto</div>
       <div class="form-group"><label>Concepto *</label>
-        <div style="display:flex;gap:6px;">
-          <select id="gn-concepto" style="flex:1;min-width:0;">${opcionesConceptoGasto(conceptos,'')}</select>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <select id="gn-concepto" style="flex:1 1 200px;min-width:0;">${opcionesConceptoGasto(conceptos,'')}</select>
           <button type="button" class="btn btn-ghost btn-sm" onclick="toggleNuevoConcepto()" title="Agregar un concepto nuevo">${ic('i-plus')} Agregar concepto</button>
         </div>
         <div id="gn-nuevo-concepto" style="display:none;margin-top:8px;padding:10px;border:1px dashed rgba(212,175,55,0.3);border-radius:10px;">
