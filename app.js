@@ -1505,7 +1505,7 @@ function renderPedidosTable(vs){
     <td>${escapeHtml(v.cliNombre||v.mesa||'—')}${v.cliTel?`<br><span class="text-xs text-gray">${escapeHtml(v.cliTel)}</span>`:''}</td>
     <td class="font-bold">${fmtMoney(v.total)}</td>
     <td>${abierta?'<span class="badge badge-orange">Abierta</span>':porVerificar?'<span class="badge badge-blue">Por verificar</span>':'<span class="badge badge-green">Pagada</span>'}</td>
-    <td>${cocinaBadge(v.estadoCocina)}${v.llamadoMesero&&v.estadoPedido!=='entregado'?'<br><span class="badge badge-gold" style="margin-top:3px;">🔔 Listo - recoger</span>':''}</td>
+    <td>${cocinaBadge(v.estadoCocina)}</td>
     <td><select onchange="setEstadoPedido('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="activo" ${v.estadoPedido==='activo'?'selected':''}>Activo</option><option value="entregado" ${v.estadoPedido==='entregado'?'selected':''}>Entregado</option></select></td>
     <td>${v.tipo==='domicilio'?domiciliarioSelect(v):'—'}</td>
     <td style="display:flex;gap:5px;flex-wrap:wrap;">
@@ -1850,7 +1850,9 @@ function listos(){
     <div class="flex-between mb-2"><span class="text-gold font-bold" style="font-size:16px;">${refCocina(v)}</span><span class="badge badge-green">${ic('i-check')} Listo</span></div>
     <div class="text-sm mb-2">${tipoLabel(v.tipo)}${v.mesa?' · '+v.mesa:''}${v.cliNombre?' · '+escapeHtml(v.cliNombre):''}</div>
     ${v.tipo==='domicilio'?`<div class="text-xs text-gray mb-2">${ic('i-pin')} ${escapeHtml(v.cliDir||'')} ${v.domiciliario?'· '+escapeHtml(v.domiciliario):''}</div>`:''}
+    <div class="text-xs text-gray mb-2">${ic('i-clock')} Listo ${v.horaListo?'a las '+fmtHora(v.horaListo):''}</div>
     <button class="btn btn-success btn-block btn-sm" onclick="setEstadoCocina('${v.id}','entregado')">${ic('i-check')} Marcar Entregado</button>
+    <button class="btn btn-ghost btn-block btn-sm" style="margin-top:6px;" onclick="setEstadoCocina('${v.id}','preparando')">${ic('i-chef')} Devolver a cocina</button>
   </div>`).join('')}</div>`}</div>`;
 }
 
@@ -2042,7 +2044,9 @@ function irAAgendarNuevo(){
 }
 
 function cocina(){
-  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.estado!=='agendado'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='entregado')
+  // Al marcar LISTO el pedido SALE de esta pantalla (pasa a "Pedidos Listos").
+  // Así la cocina solo ve lo que falta por preparar y no se llena de tarjetas.
+  const vs=(DB.get('ventas')||[]).filter(v=>v.estado!=='anulada'&&v.estado!=='agendado'&&v.estadoPedido!=='entregado'&&v.estadoCocina!=='entregado'&&v.estadoCocina!=='listo')
     .sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   // Detectar pedido NUEVO: si hay más pedidos que antes, sonar alarma fuerte
   const pendientes=vs.filter(v=>v.estadoCocina==='pendiente'||v.estadoCocina==='preparando').length;
@@ -2098,33 +2102,11 @@ function renderKDS(vs){
       ${v.obs?`<div style="margin-top:8px;padding:6px 10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:12px;color:var(--orange);">${escapeHtml(v.obs)}</div>`:''}
       <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
         ${v.estadoCocina!=='preparando'&&v.estadoCocina!=='listo'?`<button class="btn btn-primary btn-sm" onclick="setEstadoCocina('${v.id}','preparando')">${ic('i-chef')} Preparando</button>`:''}
-        ${v.estadoCocina!=='listo'?`<button class="btn btn-success btn-sm" onclick="setEstadoCocina('${v.id}','listo')">${ic('i-check')} Listo</button>`:`<span class="badge badge-green">${ic('i-check')} Listo</span>`}
-        ${v.estadoCocina==='listo'?`<button class="btn btn-gold btn-sm" onclick="llamarMesero('${v.id}')">${ic('i-bell')} Llamar mesero</button>`:''}
+        <button class="btn btn-success btn-sm" onclick="setEstadoCocina('${v.id}','listo')">${ic('i-check')} Listo</button>
       </div></div>`;}).join('')}</div>`;
 }
-function llamarMesero(id){
-  const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  const vs=DB.get('ventas')||[]; const t=vs.find(x=>x.id===id);
-  if(t){
-    t.llamadoMesero=true;
-    t.llamadoEn=now();
-    t.llamadoTick=ahoraMs(); // marca única de esta pulsación (cambia cada vez)
-    t.llamadoCount=(t.llamadoCount||0)+1;
-    fusionarYGuardarVentas(vs);
-  }
-  // Suena FUERTE en la pantalla de cocina también (confirma al cocinero)
-  try{ sonidoLlamarMeseroFuerte(); }catch(e){}
-  toast(`🔔 Llamando al mesero: ${refCocina(v)} listo`,'success');
-}
-// Sonido fuerte para llamar al mesero (más notorio que la campanita normal)
-function sonidoLlamarMeseroFuerte(){
-  try{
-    campana(1319,0,0.25,1.0);
-    campana(1760,0.15,0.3,1.0);
-    campana(1319,0.35,0.25,1.0);
-    campana(1760,0.5,0.35,1.0);
-  }catch(e){}
-}
+// El "llamado al mesero" con alarma se retiró: al marcar LISTO, el pedido sale de cocina
+// y aparece solo en "Pedidos Listos". Sin alarmas repetidas.
 function setEstadoCocina(id,e){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id);
   if(v){ v.estadoCocina=e; if(e==='entregado') v.estadoPedido='entregado';
@@ -2132,7 +2114,7 @@ function setEstadoCocina(id,e){
     if(e==='listo' && !v.horaListo) v.horaListo=now();  // momento en que quedó listo (para medir tiempos)
     if(e==='entregado' || e==='listo'){ v.pedidoAgregado=false; v.itemsAgregados=null; v.yaFueServida=true; } // limpiar aviso; recordar que ya se sirvió
     fusionarYGuardarVentas(vs);
-    if(e==='listo'){ sonidoListo(); toast(`${refCocina(v)} listo para entregar`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
+    if(e==='listo'){ toast(`${refCocina(v)} listo · pasó a Pedidos Listos`,'success'); } logAudit('Cocina: '+e,v.factura||v.cliNombre); }
   showPage(STATE.page); updateBadges();
 }
 
@@ -3977,26 +3959,7 @@ function desbloquearPantalla(){
   else { document.getElementById('lock-error').style.display='block'; document.getElementById('lock-pass').value=''; sonidoError(); }
 }
 setInterval(updateClock,1000);
-// Detector de "llamado a mesero": si cocina llama a un mesero, suena en la pantalla del mesero.
-let _ultimoLlamados=0;
-function revisarLlamadoMesero(){
-  if(!STATE.user) return;
-  // Aplica a meseros (y también admin/supervisor/cajero que ven pedidos)
-  const roles=['mesero','admin','supervisor','cajero'];
-  if(!roles.includes(STATE.user.rol)) return;
-  const vs=DB.get('ventas')||[];
-  // Buscar la marca de llamada MÁS RECIENTE de todos los pedidos activos.
-  // Cada vez que el cocinero toca "Llamar mesero", el tick cambia → suena de nuevo.
-  let maxTick=0;
-  vs.forEach(v=>{ if(v.llamadoMesero && v.estadoPedido!=='entregado' && v.estado!=='anulada' && v.llamadoTick>maxTick) maxTick=v.llamadoTick; });
-  if(_ultimoLlamados>0 && maxTick>_ultimoLlamados){
-    // Sonar FUERTE y repetido en la pantalla del mesero
-    try{ sonidoLlamarMeseroFuerte(); }catch(e){}
-    try{ toast('🔔🔔 COCINA LLAMA: pedido listo para recoger','info'); }catch(e){}
-  }
-  if(maxTick>_ultimoLlamados) _ultimoLlamados=maxTick;
-}
-setInterval(revisarLlamadoMesero, 3000);
+// (Retirado el detector de alarma de "llamado a mesero": ya no suena ninguna alarma de pedido listo.)
 // Revisa cada 20s si algun pedido AGENDADO llego a su hora, para enviarlo solo a cocina.
 setInterval(()=>{ try{ if(STATE.user) revisarAgendados(); }catch(e){} }, 20000);
 setInterval(()=>{ if(STATE.user && (STATE.page==='cocina'||STATE.page==='listos'||STATE.page==='pedidos'||STATE.page==='tiempos')){ showPage(STATE.page); } updateBadges(); },6000);
