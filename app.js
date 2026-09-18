@@ -661,6 +661,7 @@ const PAGE_META={
   impresiones:['i-orders','Impresiones']
 };
 function showPage(name){
+  try{ aplicarApariencia(); }catch(e){}
   STATE.page=name;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'));
   document.getElementById('nav-'+name)?.classList.add('active');
@@ -3351,9 +3352,31 @@ function config(){
       <div class="form-group"><label>Cantidad de Mesas</label><input type="number" id="cfg-mesas" value="${c.numMesas||25}" min="1" max="200"></div>
       <div class="form-group"><label>Logo del restaurante (para la factura)</label>
         <input type="file" id="cfg-logo-file" accept="image/png,image/jpeg" onchange="cargarLogo(event)">
-        <div id="cfg-logo-preview" style="margin-top:8px;">${c.logo?`<img src="${c.logo}" style="max-height:70px;border-radius:6px;background:#fff;padding:4px;"> <button class="btn btn-ghost btn-sm" onclick="quitarLogo()">${ic('i-trash')} Quitar</button>`:'<span class="text-xs text-gray">Sin logo. Suba un PNG o JPG.</span>'}</div>
+        <div id="cfg-logo-preview" style="margin-top:8px;">${c.logo?`<img src="${c.logo}" class="logo-redondo" style="height:70px;width:70px;"> <button class="btn btn-ghost btn-sm" onclick="quitarLogo()">${ic('i-trash')} Quitar</button>`:'<span class="text-xs text-gray">Sin logo. Suba un PNG o JPG.</span>'}</div>
       </div>
       <button class="btn btn-gold" onclick="saveConfig()">${ic('i-check')} Guardar</button>
+    </div>
+    <div class="card"><div class="card-title">${ic('i-tag')} Apariencia del Sistema</div>
+      <p class="text-sm text-gray mb-2">Cambie los colores de fondo y del logotipo. El cambio se ve al instante y se aplica a todos los equipos.</p>
+      <div class="form-grid-2">
+        <div class="form-group"><label>Fondo</label>
+          <select id="cfg-fondo" onchange="previsualizarApariencia()">${FONDOS.map(([v,t])=>`<option value="${v}" ${(c.fondo||'imperial')===v?'selected':''}>${t}</option>`).join('')}</select>
+        </div>
+        <div class="form-group"><label>Intensidad del color</label>
+          <select id="cfg-brillo" onchange="previsualizarApariencia()">${BRILLOS.map(([v,t])=>`<option value="${v}" ${(c.brillo||'medio')===v?'selected':''}>${t}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="form-group"><label>Color del nombre "Portal Imperial"</label>
+        <select id="cfg-logo-color" onchange="previsualizarApariencia()">${LOGOS.map(([v,t])=>`<option value="${v}" ${(c.logoColor||'oro')===v?'selected':''}>${t}</option>`).join('')}</select>
+      </div>
+      <div style="padding:14px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:14px;background:rgba(0,0,0,0.25);margin-bottom:14px;text-align:center;">
+        <div class="login-logo" style="margin:0;"><h1 style="font-size:28px;">Portal Imperial</h1></div>
+        <div class="text-xs text-gray" style="margin-top:4px;">Así se verá en la entrada y en el menú</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-gold" onclick="saveApariencia()">${ic('i-check')} Guardar apariencia</button>
+        <button class="btn btn-ghost" onclick="aplicarApariencia()">${ic('i-history')} Descartar cambios</button>
+      </div>
     </div>
     <div class="card"><div class="card-title">${ic('i-edit')} Marca de Agua en Facturas</div>
       <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;"><input type="checkbox" id="cfg-marca-activa" ${c.marcaAguaActiva?'checked':''} style="width:auto;"> Mostrar marca de agua en las facturas</label>
@@ -3987,8 +4010,40 @@ function showConexion(estado){
   el.innerHTML = '<i></i><span>'+(estado==='ok'?'Sincronizado':estado==='off'?'Sin conexión':'Conectando')+'</span>';
 }
 
+// ===== APARIENCIA: fondo del sistema y color del logotipo (Configuración → Apariencia) =====
+const FONDOS = [
+  ['imperial','Imperial (oro y rojo)'], ['sobrio','Sobrio (gris humo)'], ['oro','Oro'],
+  ['noche','Noche (azul)'], ['esmeralda','Esmeralda'], ['vino','Vino tinto'], ['negro','Negro plano']
+];
+const BRILLOS = [['suave','Suave'],['medio','Medio'],['fuerte','Fuerte']];
+const LOGOS = [['oro','Dorado'],['rojo-oro','Oro a rojo'],['rojo','Rojo imperial'],['blanco','Blanco con halo rojo']];
+function aplicarApariencia(){
+  const c=DB.get('config')||{};
+  const b=document.body; if(!b) return;
+  b.dataset.fondo  = c.fondo   || 'imperial';
+  b.dataset.brillo = c.brillo  || 'medio';
+  b.dataset.logo   = c.logoColor || 'oro';
+}
+function previsualizarApariencia(){
+  const b=document.body;
+  const f=document.getElementById('cfg-fondo'), br=document.getElementById('cfg-brillo'), lg=document.getElementById('cfg-logo-color');
+  if(f) b.dataset.fondo=f.value;
+  if(br) b.dataset.brillo=br.value;
+  if(lg) b.dataset.logo=lg.value;
+}
+function saveApariencia(){
+  const c=DB.get('config')||{};
+  c.fondo=document.getElementById('cfg-fondo').value;
+  c.brillo=document.getElementById('cfg-brillo').value;
+  c.logoColor=document.getElementById('cfg-logo-color').value;
+  DB.set('config',c); aplicarApariencia();
+  logAudit('Cambió la apariencia', c.fondo+' / '+c.brillo+' / logo '+c.logoColor);
+  toast('Apariencia guardada para todos los equipos','success');
+}
+
 function bootApp(){
   buildModals();
+  aplicarApariencia();
   updateClock();
   aplicarTactilGuardado();
   // Mostrar logo en el login si existe
