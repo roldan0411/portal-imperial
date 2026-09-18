@@ -747,7 +747,7 @@ function ventas(){
     const esMesero = STATE.user.rol==='mesero';
     return `<div class="card" style="max-width:520px;margin:40px auto;text-align:center;padding:40px;">
       <div style="font-size:48px;color:var(--gold);margin-bottom:12px;">${ic('i-lock')}</div>
-      <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:12px;">Caja cerrada</h2>
+      <h2 style="font-family:Nunito,sans-serif;font-weight:900;font-size:24px;letter-spacing:-0.6px;color:var(--gold);text-shadow:0 0 20px rgba(255,210,74,0.4);margin-bottom:12px;">Caja cerrada</h2>
       ${esMesero
         ? `<p class="text-gray mb-2">No se puede vender porque la caja está cerrada. Avise al <strong>cajero o administrador</strong> para que abra la caja. Usted no puede abrir caja.</p>`
         : `<p class="text-gray mb-2">No puede registrar ventas sin antes abrir la caja con el fondo inicial. Esto es necesario para que el cuadre de caja al final del día sea correcto.</p>
@@ -2125,7 +2125,7 @@ function caja(){
   if(!c){
     return `<div class="card" style="max-width:480px;margin:0 auto;text-align:center;padding:36px;">
       <div style="font-size:48px;color:var(--red-light);margin-bottom:12px;">${ic('i-lock')}</div>
-      <h2 style="font-family:Cinzel,serif;color:var(--gold);margin-bottom:10px;">Caja Cerrada</h2>
+      <h2 style="font-family:Nunito,sans-serif;font-weight:900;font-size:24px;letter-spacing:-0.6px;color:var(--gold);text-shadow:0 0 20px rgba(255,210,74,0.4);margin-bottom:10px;">Caja cerrada</h2>
       ${puedeAbrir
         ? `<p class="text-gray mb-2">La caja está cerrada. Ábrala con la base inicial para comenzar a operar.</p>
            <button class="btn btn-gold" onclick="abrirModalCaja()" style="padding:13px 30px;">${ic('i-lock')} Abrir Caja</button>`
