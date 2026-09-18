@@ -3976,10 +3976,15 @@ const BACKUP_KEYS = ['ventas', ...FIREBASE_KEYS];
 
 function showConexion(estado){
   let el=document.getElementById('fb-status');
-  if(!el){ el=document.createElement('div'); el.id='fb-status'; el.style.cssText='position:fixed;bottom:10px;left:10px;z-index:9998;font-size:11px;padding:5px 10px;border-radius:20px;font-family:Inter,sans-serif;'; document.body.appendChild(el); }
-  if(estado==='ok'){ el.style.background='rgba(39,174,96,0.2)'; el.style.color='#2ECC71'; el.style.border='1px solid rgba(39,174,96,0.4)'; el.textContent='● Sincronizado'; }
-  else if(estado==='off'){ el.style.background='rgba(192,57,43,0.2)'; el.style.color='#E74C3C'; el.style.border='1px solid rgba(192,57,43,0.4)'; el.textContent='● Sin conexión (modo local)'; }
-  else { el.style.background='rgba(212,175,55,0.2)'; el.style.color='#D4AF37'; el.style.border='1px solid rgba(212,175,55,0.4)'; el.textContent='● Conectando...'; }
+  if(!el){
+    el=document.createElement('div'); el.id='fb-status';
+    const destino=document.querySelector('.topbar-right');
+    if(destino) destino.insertBefore(el, destino.firstChild);
+    else document.body.appendChild(el);
+  }
+  el.className='conexion '+(estado==='ok'?'ok':estado==='off'?'off':'espera');
+  el.title = estado==='ok'?'Los cambios se comparten con los demás equipos':estado==='off'?'Trabajando solo en este equipo. Se sincroniza al volver la conexión.':'Conectando con la nube';
+  el.innerHTML = '<i></i><span>'+(estado==='ok'?'Sincronizado':estado==='off'?'Sin conexión':'Conectando')+'</span>';
 }
 
 function bootApp(){
