@@ -32,7 +32,16 @@ let PEDIDOS_BORRADOS={};         // id -> fecha (ms) de borrado
 let PEDIDOS_LISTOS=false;        // ya llegó la primera carga del servidor
 function copiaLimpia(o){ return JSON.parse(JSON.stringify(o)); }
 function ordenarVentas(arr){ return arr.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha)); }
-function guardarVentasLocal(){ try{ localStorage.setItem('pi_ventas', JSON.stringify(CACHE['ventas']||[])); }catch(e){} }
+// Copia local SOLO de los pedidos recientes (3 días). Todo el historial (miles de pedidos, varios MB)
+// no cabe en el almacenamiento del navegador (~5 MB): antes fallaba en silencio y el equipo quedaba
+// sin respaldo, y al entrar sin la nube todo salía en 0.
+function guardarVentasLocal(){
+  try{
+    const lim=ahoraMs()-3*86400000;
+    const recientes=(CACHE['ventas']||[]).filter(v=>v && new Date(v.fecha).getTime()>=lim);
+    localStorage.setItem('pi_ventas', JSON.stringify(recientes));
+  }catch(e){}
+}
 // Registra un pedido tal como lo dejó el servidor
 function marcarBase(v){ try{ const j=JSON.stringify(v); PEDIDO_BASE.set(v,j); SERVER_VENTAS[v.id]=j; }catch(e){} }
 function fbPuedeEscribir(){ return FB_READY && fbDB && PEDIDOS_LISTOS; }
@@ -132,10 +141,14 @@ function refrescarPorPedidos(){
 }
 // ¿Hay una ventana abierta (cobro, edición de pago...)? No redibujar debajo mientras se usa.
 function modalAbierto(){ return [...document.querySelectorAll('.modal-overlay')].some(m=>m.style.display==='flex'); }
-// Escucha pedido por pedido
+// Escucha pedido por pedido.
+// Mientras llega la carga inicial (PEDIDOS_LISTOS=false) se ignoran los eventos uno a uno:
+// la lista completa se arma de una vez en cargarPedidos() (ordenar miles de pedidos uno por uno
+// congelaba los equipos lentos).
 function escucharPedidos(){
   const ref=fbDB.ref(PEDIDOS_PATH);
   const poner=snap=>{
+    if(!PEDIDOS_LISTOS) return;
     const v=snap.val(); if(!v||!v.id){ return; }
     if(PEDIDOS_BORRADOS[v.id]){ ref.child(snap.key).remove(); return; }
     const arr=CACHE['ventas']||[];
@@ -150,7 +163,16 @@ function escucharPedidos(){
   ref.on('child_added',poner);
   ref.on('child_changed',poner);
   ref.on('child_removed',snap=>{
+    if(!PEDIDOS_LISTOS) return;
     const id=snap.key;
+    // Si no fue borrado sino ARCHIVADO (otro equipo lo pasó al archivo), que siga visible en los
+    // reportes de ese mes si este equipo ya los tenía abiertos
+    try{
+      const v=snap.val();
+      if(v&&v.id&&v.fecha&&!PEDIDOS_BORRADOS[id] && ahoraMs()-new Date(v.fecha).getTime()>30*86400000){
+        const m=mesDePedido(v); if(ARCHIVO[m] && !ARCHIVO[m].some(x=>x.id===id)) ARCHIVO[m].push(v);
+      }
+    }catch(e){}
     delete SERVER_VENTAS[id];
     CACHE['ventas']=(CACHE['ventas']||[]).filter(v=>v&&v.id!==id);
     refrescarPorPedidos();
@@ -167,6 +189,85 @@ function escucharPedidos(){
     if(!snap.exists()) return;
     fbDB.ref(PEDIDOS_PATH).once('value').then(p=>migrarVentasViejas(snap.val(), p.val()||{}));
   });
+}
+// ======================================================================
+// ARCHIVO DE PEDIDOS VIEJOS (v4)
+// data/pedidos guarda solo lo de los últimos 35 días (lo que usa el día a día), así el sistema
+// abre rápido aunque pasen los meses. Los pedidos cobrados o anulados más viejos se mueven a
+//   data/pedidos_archivo/{AAAA-MM}/{id}
+// y se descargan SOLO al abrir Historial, Reportes o Registro Contable de esos meses.
+// ======================================================================
+const ARCHIVO_PATH='data/pedidos_archivo';
+const DIAS_ACTIVOS=35;
+const ARCHIVO={};            // 'AAAA-MM' -> pedidos archivados de ese mes (ya descargados)
+const _archivoCargando={};   // 'AAAA-MM' -> descarga en curso
+function mesDePedido(v){ return diaColombia(new Date(v.fecha).getTime()).substring(0,7); }
+// Lista de meses 'AAAA-MM' hacia atrás, empezando por el actual (hora Colombia)
+function mesesAtras(n){
+  const out=[]; let [y,m]=diaColombia().substring(0,7).split('-').map(Number);
+  for(let i=0;i<n;i++){ out.push(y+'-'+String(m).padStart(2,'0')); m--; if(m===0){ m=12; y--; } }
+  return out;
+}
+function cargarMesArchivo(m){
+  if(m in ARCHIVO) return Promise.resolve(ARCHIVO[m]);
+  if(_archivoCargando[m]) return _archivoCargando[m];
+  _archivoCargando[m]=fbDB.ref(ARCHIVO_PATH+'/'+m).once('value').then(s=>{
+    ARCHIVO[m]=Object.values(s.val()||{}).filter(v=>v&&v.id&&!PEDIDOS_BORRADOS[v.id]);
+    return ARCHIVO[m];
+  }).finally(()=>{ delete _archivoCargando[m]; });
+  return _archivoCargando[m];
+}
+// ¿Ya están descargados esos meses? Si no, los descarga y vuelve a dibujar la pantalla actual.
+function asegurarArchivo(meses){
+  if(!fbDB || !FB_READY) return true;   // sin conexión: se muestra lo que hay en el equipo
+  const falta=[...new Set(meses)].filter(m=>!(m in ARCHIVO));
+  if(!falta.length) return true;
+  const pag=STATE.page;
+  Promise.all(falta.map(m=>cargarMesArchivo(m).catch(e=>{
+    console.error('Archivo '+m,e); ARCHIVO[m]=[]; toast('No se pudo cargar el historial de '+m+'. Revise la conexión.','error');
+  }))).then(()=>{
+    if(!STATE.user || STATE.page!==pag) return;
+    if(modalAbierto()) window._refrescoPendiente=true; else { try{ showPage(pag); }catch(e){} }
+  });
+  return false;
+}
+// Pedidos recientes + los archivados de los meses indicados, sin repetir
+function ventasHistorial(meses){
+  const act=DB.get('ventas')||[];
+  const ids=new Set(act.map(v=>v.id)); const extra=[];
+  [...new Set(meses)].forEach(m=>(ARCHIVO[m]||[]).forEach(v=>{ if(!ids.has(v.id)&&!PEDIDOS_BORRADOS[v.id]){ ids.add(v.id); extra.push(v); } }));
+  return extra.length? ordenarVentas(act.concat(extra)) : act;
+}
+function cargandoHistorialHTML(){
+  return `<div class="card"><div class="empty-state">${ic('i-history')}<p>Cargando el historial de meses anteriores…</p></div></div>`;
+}
+// Pasa al archivo los pedidos cobrados/anulados de hace más de 35 días.
+// Lo hace UN solo equipo al día (candado en data/archivo_meta/ultimo) y en tandas.
+// Cada tanda es UNA escritura atómica: el pedido entra al archivo y sale de la lista activa
+// al mismo tiempo, así nunca se pierde ni queda repetido.
+function archivarPedidosViejos(){
+  if(!fbPuedeEscribir()) return;
+  const hoy=diaColombia();
+  fbDB.ref('data/archivo_meta/ultimo').transaction(cur=> cur===hoy ? undefined : hoy).then(r=>{
+    if(!r.committed) return; // otro equipo ya lo hizo hoy
+    const lim=ahoraMs()-DIAS_ACTIVOS*86400000;
+    const caja=DB.get('caja_actual');
+    const viejos=Object.keys(SERVER_VENTAS).map(id=>{ try{ return JSON.parse(SERVER_VENTAS[id]); }catch(e){ return null; } })
+      .filter(v=>v && v.id && v.fecha && (v.estado==='pagada'||v.estado==='anulada')
+        && new Date(v.fecha).getTime()<lim && !(caja && v.cajaId===caja.id) && !PEDIDOS_BORRADOS[v.id]);
+    if(!viejos.length) return;
+    let i=0, total=0;
+    const tanda=()=>{
+      if(!fbPuedeEscribir()) return;
+      const lote=viejos.slice(i,i+300); i+=300;
+      if(!lote.length){ console.log('Archivados',total,'pedidos viejos'); return; }
+      const u={};
+      lote.forEach(v=>{ u['pedidos_archivo/'+mesDePedido(v)+'/'+v.id]=v; u['pedidos/'+v.id]=null; });
+      return fbDB.ref('data').update(u).then(()=>{ total+=lote.length; setTimeout(tanda,1500); })
+        .catch(e=>console.warn('Archivo de pedidos (tanda):',e));
+    };
+    return tanda();
+  }).catch(e=>console.warn('Archivo de pedidos:',e));
 }
 const ic = id => `<svg class="ic"><use href="#${id}"/></svg>`;
 let SERVER_OFFSET = 0; // diferencia entre reloj del servidor y el del dispositivo (ms)
@@ -501,6 +602,8 @@ const STATE = { user:null, page:'dashboard', order:[], descuento:0, descMot:'',
 
 // ========================= AUTH =========================
 function doLogin(){
+  // No entrar hasta tener los datos reales del negocio (si no, todo sale en 0 o como un sistema vacío)
+  if(!DATOS_LISTOS){ const e=document.getElementById('login-error'); e.textContent='Espere: todavía se están cargando los datos del negocio.'; e.style.display='block'; return; }
   const u=document.getElementById('login-user').value.trim();
   const p=document.getElementById('login-pass').value;
   const user=(DB.get('usuarios')||[]).find(x=>x.usuario===u && x.pass===p && x.activo);
@@ -520,10 +623,7 @@ function doLogin(){
   document.getElementById('user-name-sb').textContent=user.nombre;
   document.getElementById('user-role-sb').textContent=user.rol.charAt(0).toUpperCase()+user.rol.slice(1);
   document.getElementById('user-avatar-sb').textContent=user.nombre.charAt(0).toUpperCase();
-  // Logo en el sidebar
-  const logoSb=(DB.get('config')||{}).logo||window.LOGO_DEFAULT;
-  if(logoSb){ const img=document.getElementById('sidebar-logo-img'); const fb=document.getElementById('sidebar-logo-fallback');
-    if(img){ img.src=logoSb; img.style.display='block'; } if(fb) fb.style.display='none'; }
+  mostrarLogos();
   buildSidebar();
   logAudit('Inicio de sesión');
   const landing = user.rol==='cocina'?'cocina' : (user.rol==='mesero')?'ventas' : (user.rol==='cajero')?'caja' : (user.rol==='impresiones')?'impresiones' : 'dashboard';
@@ -1840,7 +1940,7 @@ function eliminarDefinitivo(id){
   // NO se registra en auditoría cuando lo hace admin o supervisor (según indicación de los dueños).
   toast('Pedido eliminado. Descontado de ventas y caja.','error'); showPage('pedidos');
 }
-function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(v){printFactura(v);} }
+function reimprimir(id){ const v=(DB.get('ventas')||[]).find(x=>x.id===id) || Object.values(ARCHIVO).flat().find(x=>x&&x.id===id); if(v){printFactura(v);} }
 
 // ========================= PEDIDOS LISTOS =========================
 function listos(){
@@ -1975,6 +2075,7 @@ function editarAgendado(id){
 let _revisandoAgenda=false;
 function revisarAgendados(){
   if(_revisandoAgenda) return;
+  if(!PEDIDOS_LISTOS) return;
   const vs=DB.get('ventas')||[];
   const listos=vs.filter(v=>v.estado==='agendado' && v.programadoPara && new Date(v.programadoPara).getTime()<=ahoraMs());
   if(listos.length===0) return;
@@ -2747,11 +2848,22 @@ function eliminarUsuario(id){
 }
 
 // ========================= HISTORIAL =========================
+// '' = recientes (últimos 35 días); 'AAAA-MM' = un mes completo (se trae del archivo si hace falta)
+function histLista(){
+  const mes=STATE.histMes||'';
+  if(!mes) return DB.get('ventas')||[];
+  return ventasHistorial([mes]).filter(v=>v.fecha && mesDePedido(v)===mes);
+}
 function historial(){
-  const vs=DB.get('ventas')||[];
-  return `<div class="card"><div class="flex-between mb-2"><div class="card-title" style="margin:0;">${ic('i-history')} Historial de Ventas</div>
-    <div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="hist-q" placeholder="Factura, cliente, teléfono..." value="${escapeHtml(STATE.histQ||'')}" oninput="STATE.histQ=this.value;document.getElementById('hist-table-wrap').innerHTML=renderHistTable(DB.get('ventas')||[])" style="padding-left:34px;width:240px;"></div></div>
-    <div id="hist-table-wrap">${renderHistTable(vs)}</div></div>`;
+  const mes=STATE.histMes||'';
+  const listo = !mes || asegurarArchivo([mes]);
+  const opciones=[`<option value="" ${!mes?'selected':''}>Recientes (últimos ${DIAS_ACTIVOS} días)</option>`]
+    .concat(mesesAtras(13).map(m=>{ const [y,n]=m.split('-').map(Number); const lbl=new Date(Date.UTC(y,n-1,1)).toLocaleDateString('es-CO',{month:'long',year:'numeric',timeZone:'UTC'}); return `<option value="${m}" ${m===mes?'selected':''}>${lbl}</option>`; }));
+  return `<div class="card"><div class="flex-between mb-2" style="flex-wrap:wrap;gap:10px;"><div class="card-title" style="margin:0;">${ic('i-history')} Historial de Ventas</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <select onchange="STATE.histMes=this.value;showPage('historial')" style="width:auto;">${opciones.join('')}</select>
+    <div style="position:relative;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray3)">${ic('i-search')}</span><input type="text" id="hist-q" placeholder="Factura, cliente, teléfono..." value="${escapeHtml(STATE.histQ||'')}" oninput="STATE.histQ=this.value;document.getElementById('hist-table-wrap').innerHTML=renderHistTable(histLista())" style="padding-left:34px;width:240px;"></div></div></div>
+    <div id="hist-table-wrap">${listo?renderHistTable(histLista()):`<div class="empty-state">${ic('i-history')}<p>Cargando el historial del mes…</p></div>`}</div></div>`;
 }
 function renderHistTable(vs){
   const q=(STATE.histQ||'').toLowerCase().trim();
@@ -2938,7 +3050,6 @@ function exportarGastosNegExcel(){
 let _contableMes = null; // 'YYYY-MM' seleccionado; null = mes actual
 function contable(){
   if(!['admin','jefe','dueño'].includes(STATE.user.rol)){ return '<div class="card"><p class="text-gray">Solo el administrador, jefe o dueño pueden ver el Registro Contable.</p></div>'; }
-  const vs=DB.get('ventas')||[];
   const cierres=DB.get('cierres')||[];
   // Mes seleccionado (por defecto el actual, en hora Colombia)
   const mesActual=diaColombia().substring(0,7);
@@ -2947,6 +3058,9 @@ function contable(){
   // Mes anterior para comparativo
   const dPrev=new Date(Date.UTC(anio, mesNum-1, 1)); dPrev.setUTCMonth(dPrev.getUTCMonth()-1);
   const mesPrev=dPrev.toISOString().substring(0,7);
+  // Los pedidos de meses pasados están en el archivo: traerlos antes de calcular (nunca cifras a medias)
+  if(!asegurarArchivo([mes, mesPrev])){ window._contableData=null; return cargandoHistorialHTML(); }
+  const vs=ventasHistorial([mes, mesPrev]);
 
   // Un pedido es del mes X si su día Colombia cae en ese mes
   const delMes=(v,m)=>{ if(!v.fecha) return false; return diaColombia(new Date(v.fecha).getTime()).substring(0,7)===m; };
@@ -3167,8 +3281,12 @@ function reportes(){
   const hoy=vs.filter(v=>v.fecha?.startsWith(t)&&esPagada(v)); const totalHoy=hoy.reduce((a,v)=>a+v.total,0);
   const weekly=[]; for(let i=6;i>=0;i--){ const d=new Date(ahoraMs()-i*864e5); const dk=d.toISOString().split('T')[0];
     const p=vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)); weekly.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
+  // La gráfica de 12 meses necesita los meses archivados (se traen solo al abrir Reportes)
+  const meses12=mesesAtras(13);
+  const historialListo=asegurarArchivo(meses12);
+  const vsH=ventasHistorial(meses12);
   const monthly=[]; for(let i=11;i>=0;i--){ const d=new Date(); d.setMonth(d.getMonth()-i); d.setDate(1); const mk=d.toISOString().substring(0,7);
-    const p=vs.filter(v=>v.fecha?.startsWith(mk)&&esPagada(v)); monthly.push({lbl:d.toLocaleDateString('es-CO',{month:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
+    const p=vsH.filter(v=>v.fecha?.startsWith(mk)&&esPagada(v)); monthly.push({lbl:d.toLocaleDateString('es-CO',{month:'short'}),total:p.reduce((a,v)=>a+v.total,0)}); }
   const mw=Math.max(...weekly.map(d=>d.total),1), mm=Math.max(...monthly.map(d=>d.total),1);
 
   // Productos vendidos (últimos 30 días) para más y menos vendidos
@@ -3244,7 +3362,7 @@ function reportes(){
 
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-report')} Ventas por Día (7 días)</div><div class="bar-chart" style="height:140px;">${weekly.map(d=>`<div class="bar-item"><div class="bar-val">${d.total>0?(d.total/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.total/mw)*110)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('')}</div></div>
-    <div class="card"><div class="card-title">${ic('i-report')} Ventas Mensuales (12 meses)</div><div class="bar-chart" style="height:140px;">${monthly.map(d=>`<div class="bar-item"><div class="bar-val">${d.total>0?(d.total/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.total/mm)*110)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('')}</div></div>
+    <div class="card"><div class="card-title">${ic('i-report')} Ventas Mensuales (12 meses)</div>${historialListo?'':'<p class="text-xs text-gray" style="margin:-6px 0 8px;">Cargando meses anteriores…</p>'}<div class="bar-chart" style="height:140px;">${monthly.map(d=>`<div class="bar-item"><div class="bar-val">${d.total>0?(d.total/1000).toFixed(0)+'k':''}</div><div class="bar-fill" style="height:${Math.max(4,(d.total/mm)*110)}px"></div><div class="bar-label">${d.lbl}</div></div>`).join('')}</div></div>
   </div>
 
   <div class="card"><div class="card-title">${ic('i-clock')} Horas Pico (últimos 30 días)</div>
@@ -3620,6 +3738,7 @@ const colaImprIds=new Set(); // para no encolar dos veces lo mismo
 
 function procesarImpresionesPendientes(){
   if(!imprAutoActiva()) return;
+  if(!PEDIDOS_LISTOS) return; // sin la lista real de la nube podría reimprimir pedidos ya impresos
   const vs=DB.get('ventas')||[];
   const cajaActual=DB.get('caja_actual');
   if(!cajaActual) return; // sin caja abierta no se procesa nada (evita bucles)
@@ -4046,10 +4165,7 @@ function bootApp(){
   aplicarApariencia();
   updateClock();
   aplicarTactilGuardado();
-  // Mostrar logo en el login si existe
-  const logo=(DB.get('config')||{}).logo||window.LOGO_DEFAULT;
-  if(logo){ const img=document.getElementById('login-logo-img'); const fb=document.getElementById('login-logo-fallback');
-    if(img){ img.src=logo; img.style.display='block'; } if(fb) fb.style.display='none'; }
+  mostrarLogos(); // de inmediato: el logo viene en logo.js o en la copia local, no hay que esperar la nube
   document.getElementById('login-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
   document.getElementById('login-user').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('login-pass').focus(); });
   document.getElementById('lock-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') desbloquearPantalla(); });
@@ -4072,17 +4188,80 @@ function bootApp(){
   if(imprAutoActiva()){ setTimeout(()=>{ if(!autoImpresionCajaTimer) autoImpresionCajaTimer=setInterval(procesarImpresionesPendientes,4000); }, 3000); }
 }
 
+// ---------------------------------------------------------------------------------------
+// ARRANQUE (v4)
+// Antes se descargaba TODA la base ('data', ~10 MB con un respaldo viejo de 3 MB) antes de
+// mostrar el logo y de dejar entrar. En conexiones lentas el logo tardaba, se podía entrar con
+// la copia local (vacía o vieja) y todo salía en 0; y si la carga fallaba se creaban datos de
+// ejemplo, como si fuera otro sistema vacío.
+// Ahora:
+//  • El logo y la pantalla de inicio salen al instante.
+//  • Se descarga solo lo que el sistema usa, una vez, con las mismas escuchas en tiempo real.
+//  • No se deja entrar hasta que llegan los datos reales (o el usuario elige entrar sin conexión).
+//  • Nunca se crean datos de ejemplo si la nube no respondió.
+// ---------------------------------------------------------------------------------------
+let DATOS_LISTOS = false;        // ya se puede iniciar sesión
+let MODO_SIN_CONEXION = false;   // se entró con la copia de este equipo, sin la nube
+let _errorCarga = false;
+
+function cargarRespaldoLocal(){
+  BACKUP_KEYS.forEach(k=>{ try{ const v=localStorage.getItem('pi_'+k); if(v!==null) CACHE[k]=JSON.parse(v); }catch(e){} });
+}
+
+// Logo del negocio en el inicio de sesión y en el menú
+function mostrarLogos(){
+  const logo=(DB.get('config')||{}).logo||window.LOGO_DEFAULT;
+  if(!logo) return;
+  [['login-logo-img','login-logo-fallback'],['sidebar-logo-img','sidebar-logo-fallback']].forEach(([i,f])=>{
+    const img=document.getElementById(i), fb=document.getElementById(f);
+    if(img){ if(img.getAttribute('src')!==logo) img.src=logo; img.style.display='block'; }
+    if(fb) fb.style.display='none';
+  });
+}
+
+// Mensaje y estado del botón "Iniciar Sesión" mientras cargan los datos
+function estadoLogin(html, bloqueado, esError){
+  const btn=document.getElementById('login-btn'), msg=document.getElementById('login-carga');
+  if(btn){ btn.disabled=!!bloqueado; btn.style.opacity=bloqueado?'0.55':''; btn.style.cursor=bloqueado?'wait':''; }
+  if(msg){ msg.innerHTML=html||''; msg.style.display=html?'block':'none'; msg.style.color=esError?'var(--red-light)':'var(--gray3)'; }
+}
+
+function errorCarga(err){
+  console.error('Error leyendo Firebase:', err);
+  _errorCarga=true;
+  showConexion('off');
+  ofrecerSinConexion('No se pudo leer la base de datos en la nube'+(err&&err.code?' ('+err.code+')':'')+'. Recargue la página; si sigue igual revise el internet o las reglas de Firebase.');
+}
+
+// La nube no responde: si este equipo tiene copia guardada se puede entrar con ella (avisando)
+function ofrecerSinConexion(motivo){
+  if(DATOS_LISTOS) return;
+  const hayCopia=(CACHE['usuarios']||[]).length>0;
+  if(hayCopia){
+    estadoLogin(motivo+'<br><a href="#" onclick="entrarSinConexion();return false;" style="color:var(--gold);text-decoration:underline;">Entrar con los datos guardados en este equipo</a> (pueden estar desactualizados).', true, true);
+  } else {
+    estadoLogin(motivo+'<br>Este equipo no tiene datos guardados todavía: necesita internet para la primera entrada.', true, true);
+  }
+}
+function entrarSinConexion(){
+  if(DATOS_LISTOS) return;
+  DATOS_LISTOS=true; MODO_SIN_CONEXION=true;
+  if(!CACHE['ventas']) CACHE['ventas']=[];
+  estadoLogin('Modo sin conexión: verá lo guardado en este equipo. Los pedidos nuevos se suben solos al volver la conexión.', false, true);
+}
+
 function startFirebase(){
   showConexion('conectando');
-  // Cargar respaldo local primero (arranque instantáneo)
-  BACKUP_KEYS.forEach(k=>{ try{ const v=localStorage.getItem('pi_'+k); if(v!==null) CACHE[k]=JSON.parse(v); }catch(e){} });
+  cargarRespaldoLocal();        // solo para mostrar logo/apariencia ya y como plan B sin conexión
+  bootApp();                    // pantalla de inicio lista y con logo de una vez
+  estadoLogin('Cargando datos del negocio…', true);
 
   try {
     firebase.initializeApp(window.FIREBASE_CONFIG);
     fbDB = firebase.database();
   } catch(e){
     console.error('Firebase init falló:', e);
-    showConexion('off'); FB_READY=false; initData(); bootApp(); return;
+    showConexion('off'); ofrecerSinConexion('No se pudo iniciar la conexión con la nube.'); return;
   }
 
   // Estado de conexión
@@ -4095,68 +4274,91 @@ function startFirebase(){
     if(typeof off==='number') SERVER_OFFSET = off;
   });
 
-  // Carga inicial completa
-  fbDB.ref('data').once('value').then(snap=>{
-    const data = snap.val() || {};
-    FIREBASE_KEYS.forEach(k=>{ if(data[k]!==undefined && data[k]!==null) CACHE[k]=data[k]; });
-    // PEDIDOS: la verdad es el servidor (la copia local vieja NO se mezcla, así nada revive)
-    PEDIDOS_BORRADOS = Object.assign({}, data.pedidos_borrados||{});
-    const pedSrv = data.pedidos||{};
-    SERVER_VENTAS = {};
-    const lista = Object.values(pedSrv).filter(v=>v&&v.id&&!PEDIDOS_BORRADOS[v.id]);
-    lista.forEach(marcarBase);
-    // Si aún existe el formato viejo, sus pedidos se muestran ya y se migran
-    if(data.ventas){
-      (Array.isArray(data.ventas)?data.ventas:Object.values(data.ventas)).forEach(v=>{
-        if(v&&v.id&&!pedSrv[v.id]&&!PEDIDOS_BORRADOS[v.id]) lista.push(v);
-      });
-    }
-    CACHE['ventas'] = ordenarVentas(lista);
-    guardarVentasLocal();
-    FB_READY = true;
-    PEDIDOS_LISTOS = true;
-    if(data.ventas) migrarVentasViejas(data.ventas, pedSrv);
-    // Limpiar marcas de borrado de más de 45 días
-    try{ const lim=ahoraMs()-45*86400000; const u={}; Object.entries(PEDIDOS_BORRADOS).forEach(([id,t])=>{ if(Number(t)<lim) u[id]=null; }); if(Object.keys(u).length) fbDB.ref(BORRADOS_PATH).update(u); }catch(e){}
-    subirColaPedidos();
-    escucharPedidos();
-    initData();           // crea datos por defecto solo si faltan (los sube a FB)
-    listenRealtime();     // escucha cambios de otros dispositivos
-    bootApp();
-  }).catch(e=>{
-    console.error('Carga inicial FB falló:', e);
-    showConexion('off'); FB_READY=true; PEDIDOS_LISTOS=false; initData(); bootApp();
-    // Reintentar la carga de pedidos para no quedar desincronizado
-    setTimeout(()=>{ location.reload(); }, 15000);
-  });
+  // Datos generales: la primera respuesta de cada escucha ES la carga inicial (se descarga una sola vez)
+  const faltan=new Set(FIREBASE_KEYS);
+  listenRealtime(k=>{ faltan.delete(k); revisarCargaCompleta(faltan); });
+  // Pedidos (lo más pesado)
+  cargarPedidos(()=>revisarCargaCompleta(faltan));
+
+  // Si la nube tarda demasiado, ofrecer entrar con la copia del equipo (sin dejar de esperar)
+  setTimeout(()=>{ if(!DATOS_LISTOS && !_errorCarga) ofrecerSinConexion('La conexión con la nube está muy lenta. Puede seguir esperando.'); }, 20000);
 }
 
-// Escuchar cambios en tiempo real desde otros dispositivos
-function listenRealtime(){
+function revisarCargaCompleta(faltan){
+  if(DATOS_LISTOS && !MODO_SIN_CONEXION) return;
+  if(faltan.size>0 || !PEDIDOS_LISTOS){
+    if(!DATOS_LISTOS && !_errorCarga) estadoLogin(PEDIDOS_LISTOS?'Cargando datos del negocio…':'Cargando pedidos…', true);
+    return;
+  }
+  const veniaSinConexion=MODO_SIN_CONEXION;
+  FB_READY=true; DATOS_LISTOS=true; MODO_SIN_CONEXION=false; _errorCarga=false;
+  subirColaPedidos();
+  initData();                   // crea por defecto SOLO lo que de verdad falte en la nube
+  aplicarApariencia(); mostrarLogos();
+  estadoLogin('', false);
+  setTimeout(archivarPedidosViejos, 15000); // mantenimiento diario, sin estorbar el arranque
+  if(STATE.user){
+    if(veniaSinConexion) toast('Conexión recuperada: datos actualizados desde la nube','success');
+    try{ updateBadges(); }catch(e){}
+    if(!ESCRIBIENDO && !formularioEnUso() && !modalAbierto()){ try{ showPage(STATE.page); }catch(e){} }
+  }
+}
+
+// Carga inicial de pedidos: una sola descarga que comparte la escucha en tiempo real
+function cargarPedidos(alTerminar){
+  fbDB.ref(BORRADOS_PATH).once('value').then(s=>{
+    PEDIDOS_BORRADOS = Object.assign({}, s.val()||{});
+    escucharPedidos(); // ignora eventos sueltos hasta que PEDIDOS_LISTOS sea true
+    fbDB.ref(PEDIDOS_PATH).once('value', snap=>{
+      // PEDIDOS: la verdad es el servidor (la copia local vieja NO se mezcla, así nada revive)
+      const pedSrv = snap.val()||{};
+      SERVER_VENTAS = {};
+      const lista = Object.values(pedSrv).filter(v=>v&&v.id&&!PEDIDOS_BORRADOS[v.id]);
+      lista.forEach(marcarBase);
+      CACHE['ventas'] = ordenarVentas(lista);
+      PEDIDOS_LISTOS = true;
+      guardarVentasLocal();
+      // Limpiar marcas de borrado de más de 45 días
+      try{ const lim=ahoraMs()-45*86400000; const u={}; Object.entries(PEDIDOS_BORRADOS).forEach(([id,t])=>{ if(Number(t)<lim) u[id]=null; }); if(Object.keys(u).length) fbDB.ref(BORRADOS_PATH).update(u); }catch(e){}
+      alTerminar();
+    }, errorCarga);
+  }).catch(errorCarga);
+}
+
+// Aplica un cambio de una clave general que llegó de la nube
+function aplicarCambioClave(k, v){
+  // caja_actual puede ser null de forma legítima (caja cerrada): ese cambio SÍ debe propagarse
+  // para que TODOS los dispositivos vean la caja cerrada al instante.
+  if(k==='caja_actual'){
+    CACHE[k] = (v===undefined? null : v);
+    try { localStorage.setItem('pi_'+k, JSON.stringify(CACHE[k])); } catch(e){}
+    if(STATE.user && !ESCRIBIENDO){
+      if(STATE.page!=='ventas'){ if(!formularioEnUso() && !modalAbierto()){ try{ showPage(STATE.page); }catch(e){} } }
+      else { try{ showPage('ventas'); }catch(e){} } // refrescar ventas para mostrar/ocultar bloqueo de caja
+      updateBadges();
+    }
+    return;
+  }
+  if(v===null || v===undefined) return;
+  CACHE[k] = v;
+  try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
+  if(k==='config'){ try{ aplicarApariencia(); mostrarLogos(); }catch(e){} }
+  // Si el usuario está dentro y NO está escribiendo una venta, refrescar la pantalla
+  if(STATE.user && !ESCRIBIENDO){
+    if(STATE.page!=='ventas' && !formularioEnUso() && !modalAbierto()){ try{ showPage(STATE.page); }catch(e){} }
+    updateBadges();
+  }
+}
+
+// Escuchar cambios en tiempo real desde otros dispositivos.
+// alLlegar(k) se llama la primera vez que llega cada clave (fin de su carga inicial).
+function listenRealtime(alLlegar){
   FIREBASE_KEYS.forEach(k=>{
+    let primera=true;
     fbDB.ref('data/'+k).on('value', snap=>{
-      const v = snap.val();
-      // caja_actual puede ser null de forma legítima (caja cerrada): ese cambio SÍ debe propagarse
-      // para que TODOS los dispositivos vean la caja cerrada al instante.
-      if(k==='caja_actual'){
-        CACHE[k] = (v===undefined? null : v);
-        try { localStorage.setItem('pi_'+k, JSON.stringify(CACHE[k])); } catch(e){}
-        if(STATE.user && !ESCRIBIENDO){
-          if(STATE.page!=='ventas'){ if(!formularioEnUso() && !modalAbierto()){ try{ showPage(STATE.page); }catch(e){} } }
-          else { try{ showPage('ventas'); }catch(e){} } // refrescar ventas para mostrar/ocultar bloqueo de caja
-          updateBadges();
-        }
-        return;
-      }
-      if(v===null || v===undefined) return;
-      CACHE[k] = v;
-      try { localStorage.setItem('pi_'+k, JSON.stringify(v)); } catch(e){}
-      // Si el usuario está dentro y NO está escribiendo una venta, refrescar la pantalla
-      if(STATE.user && !ESCRIBIENDO){
-        if(STATE.page!=='ventas' && !formularioEnUso() && !modalAbierto()){ try{ showPage(STATE.page); }catch(e){} }
-        updateBadges();
-      }
-    });
+      aplicarCambioClave(k, snap.val());
+      if(primera){ primera=false; if(alLlegar) alLlegar(k); }
+    }, errorCarga);
   });
 }
 
@@ -4167,6 +4369,7 @@ function revisarColaImpresion(){
   const cfg=DB.get('config')||{};
   if(!cfg.qzActivo || !esEstacionImpresion()) return; // solo el computador de impresión
   if(imprimiendoCola) return;
+  if(!PEDIDOS_LISTOS) return; // esperar la lista real de la nube (evita reimprimir)
   const vs=DB.get('ventas')||[];
   const cajaActual=DB.get('caja_actual');
   if(!cajaActual) return; // sin caja abierta no imprime nada pendiente
@@ -4198,12 +4401,15 @@ function revisarColaImpresion(){
 let ESCRIBIENDO = false;
 
 // Arranque: esperar a que cargue la librería de Firebase
-window.addEventListener('load', ()=>{
+// (DOMContentLoaded y no "load": no hay que esperar imágenes, fuentes ni otras librerías externas)
+function arrancar(){
   if(typeof firebase==='undefined' || !window.FIREBASE_CONFIG){
-    console.warn('Firebase no disponible, modo local');
+    console.warn('Firebase no disponible');
     showConexion('off');
-    BACKUP_KEYS.forEach(k=>{ try{ const v=localStorage.getItem('pi_'+k); if(v!==null) CACHE[k]=JSON.parse(v); }catch(e){} });
-    initData(); bootApp(); return;
+    cargarRespaldoLocal(); bootApp();
+    ofrecerSinConexion('No se pudo cargar la conexión con la nube (revise el internet).');
+    return;
   }
   startFirebase();
-});
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();

@@ -588,9 +588,10 @@ body.tactil input, body.tactil select { padding: 15px 16px; font-size: 16px; }
         <button class="pass-toggle" onclick="togglePass('login-pass', this)" type="button"><svg class="ic"><use href="#i-eye"/></svg></button>
       </div>
     </div>
-    <button class="btn btn-gold btn-block mt-2" onclick="doLogin()" style="font-size:15px;padding:13px;">
+    <button class="btn btn-gold btn-block mt-2" id="login-btn" onclick="doLogin()" style="font-size:15px;padding:13px;">
       <svg class="ic"><use href="#i-key"/></svg> Iniciar Sesión
     </button>
+    <p class="mt-2 text-xs" id="login-carga" style="display:none;text-align:center;line-height:1.5;"></p>
     <p class="mt-2 text-xs" id="login-error" style="color:var(--red-light);display:none;text-align:center;"></p>
     <div class="mt-2" style="text-align:center;">
       <button class="btn btn-ghost btn-sm" onclick="openModal('modal-recovery')">¿Olvidó su contraseña?</button>
@@ -682,9 +683,9 @@ body.tactil input, body.tactil select { padding: 15px 16px; font-size: 16px; }
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-<script src="firebase-config.js"></script>
+<script src="firebase-config.js?v=20261116"></script>
 <script src="logo.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=20261116"></script>
 </body>
 </html>
