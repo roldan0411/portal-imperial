@@ -798,7 +798,8 @@ function dashboard(){
   const activos=vs.filter(v=>v.estadoPedido==='activo'&&v.estado!=='anulada').length;
   const entregados=vs.filter(v=>v.estadoPedido==='entregado').length;
   const metodos={}; METODOS_PAGO.forEach(([k])=>metodos[k]=0);
-  hoy.forEach(v=>{ if(metodos[v.metodo]!==undefined) metodos[v.metodo]+=(v.ventaReal!==undefined?v.ventaReal:v.total); });
+  // Por método REAL (un pago combinado se reparte en sus métodos)
+  hoy.forEach(v=>{ METODOS_PAGO.forEach(([k])=>{ metodos[k]+=montoPorMetodoDe(v,k); }); });
   const days=[];
   for(let i=6;i>=0;i--){ const d=new Date(ahoraMs()+COL_OFFSET_MS-i*864e5); const dk=d.toISOString().split('T')[0];
     days.push({lbl:d.toLocaleDateString('es-CO',{weekday:'short',timeZone:'UTC'}), tot:vs.filter(v=>v.fecha?.startsWith(dk)&&esPagada(v)).reduce((a,v)=>a+v.total,0)}); }
@@ -1234,7 +1235,9 @@ function guardarMesa(){
       toast(huboAgregados && estabaServida ? '🍽️ Productos agregados y enviados a cocina' : 'Mesa actualizada y enviada a cocina','success');
       printTicketCocina(v);
     }
-    clearOrder(); showPage('pedidos'); return;
+    clearOrder(); showPage('pedidos');
+    avisarAjustePago(v);
+    return;
   }
 
   // Nueva mesa abierta (sin número de factura todavía, sin cobrar)
@@ -1274,6 +1277,12 @@ function guardarPedidoAbierto(){
   toast('Pedido enviado a cocina. El cajero lo cobrará.','success');
   printTicketCocina(venta);
 }
+// Si se editó un pedido YA cobrado y cambió su valor, abrir de una vez el ajuste del pago
+function avisarAjustePago(v){
+  if(!v || !pagoDescuadrado(v)) return;
+  toast('El valor del pedido cambió después de cobrar: ajuste el pago','info');
+  if(puedeEditarPago(v)) setTimeout(()=>abrirEditarPago(v.id), 250);
+}
 function cobrarVenta(){
   if(!DB.get('caja_actual')){ toast('Debe abrir la caja antes de vender','error'); showPage('caja'); return; }
   if(STATE.order.length===0){ toast('Agregue productos primero','error'); return; }
@@ -1294,7 +1303,9 @@ function cobrarVenta(){
       notifyKitchen();
       logAudit('Editó pedido',`${v.factura||v.cliNombre} por ${STATE.user.nombre}`); toast('Pedido actualizado y reenviado a cocina','success');
       printTicketCocina(v); }
-    clearOrder(); showPage('pedidos'); return;
+    clearOrder(); showPage('pedidos');
+    avisarAjustePago(v);
+    return;
   }
 
   const esDomicilio = STATE.tipoPedido==='domicilio';
@@ -1406,6 +1417,18 @@ function printFactura(v){
   if(!debeImprimirAqui()) return; // con QZ activo, solo imprime la estación de la caja
   imprimirHTML(facturaHTML(v));
 }
+// Bloque "cómo pagó" de la factura: desglose por método, domicilio directo, recibido y vueltas
+function facturaPagoHTML(v){
+  const fila=(a,b)=>`<div style="display:flex;justify-content:space-between;padding:2px 0;"><span>${a}</span><span>${b}</span></div>`;
+  if(v.estado==='abierta') return `<div style="text-align:center;font-size:14px;margin-top:7px;"><strong>PENDIENTE DE PAGO</strong></div>`;
+  const p=v.pagos;
+  if(!p || typeof p!=='object' || !((p.efectivo||0)+(p.tarjeta||0)+(p.banco||0))) return `<div style="text-align:center;font-size:14px;margin-top:7px;color:#000;">Forma de pago: <strong>${nombreMetodo(v.metodo).toUpperCase()}</strong></div>`;
+  let h=`<div style="font-size:14px;margin-top:7px;"><div style="text-align:center;margin-bottom:3px;"><strong>FORMA DE PAGO</strong></div>`;
+  METODOS_PAGO.forEach(([k,l])=>{ if((p[k]||0)>0) h+=fila(l+(k==='tarjeta'&&v.recargo>0?' (con recargo)':''), fmtMoney(p[k])); });
+  if(v.valorDom>0 && !v.domPorBanco) h+=fila('Domicilio (pagar al domiciliario)', fmtMoney(v.valorDom));
+  if(v.efectivoRecibido>0){ h+=fila('Recibido en efectivo', fmtMoney(v.efectivoRecibido)); h+=fila('Vueltas', fmtMoney(v.vueltas||0)); }
+  return h+'</div>';
+}
 function facturaHTML(v){
   const cfg=DB.get('config')||{};
   const esDom = v.tipo==='domicilio';
@@ -1451,9 +1474,9 @@ function facturaHTML(v){
       ${v.recargo>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Recargo datáfono</span><span>${fmtMoney(v.recargo)}</span></div>`:''}
     </div>
     <div style="border-top:2px solid #000;border-bottom:2px solid #000;margin-top:6px;padding:10px 0;display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-size:18px;font-weight:bold;letter-spacing:1px;">TOTAL</span><span style="font-size:24px;font-weight:bold;">${fmtMoney(v.totalCobrado!==undefined?v.totalCobrado:v.total)}</span>
+      <span style="font-size:18px;font-weight:bold;letter-spacing:1px;">TOTAL</span><span style="font-size:24px;font-weight:bold;">${fmtMoney((v.total||0)+(v.valorDom||0)+(v.propina||0)+(v.recargo||0))}</span>
     </div>
-    <div style="text-align:center;font-size:14px;margin-top:7px;color:#000;">Forma de pago: <strong>${nombreMetodo(v.metodo).toUpperCase()}</strong></div>
+    ${facturaPagoHTML(v)}
     ${v.obs?`<div style="border-top:1px solid #000;margin-top:8px;padding-top:6px;font-size:14px;"><strong>Observación:</strong> ${escapeHtml(v.obs)}</div>`:''}
     <div style="text-align:center;margin-top:14px;font-size:16px;font-weight:bold;letter-spacing:1px;">¡GRACIAS POR SU VISITA!</div>
     <div style="text-align:center;font-size:13px;color:#000;margin-top:4px;">Vuelva pronto, será un placer atenderle</div>
@@ -1605,7 +1628,7 @@ function renderPedidosTable(vs){
     <td>${tipoLabel(v.tipo)}</td>
     <td>${escapeHtml(v.cliNombre||v.mesa||'—')}${v.cliTel?`<br><span class="text-xs text-gray">${escapeHtml(v.cliTel)}</span>`:''}</td>
     <td class="font-bold">${fmtMoney(v.total)}</td>
-    <td>${abierta?'<span class="badge badge-orange">Abierta</span>':porVerificar?'<span class="badge badge-blue">Por verificar</span>':'<span class="badge badge-green">Pagada</span>'}</td>
+    <td>${abierta?'<span class="badge badge-orange">Abierta</span>':porVerificar?'<span class="badge badge-blue">Por verificar</span>':'<span class="badge badge-green">Pagada</span>'}${!abierta&&v.pagos?`<br><span class="text-xs text-gray">${textoPagos(v.pagos)}</span>`:''}${pagoDescuadrado(v)?'<br><span class="badge badge-red">⚠ Ajustar pago</span>':''}</td>
     <td>${cocinaBadge(v.estadoCocina)}</td>
     <td><select onchange="setEstadoPedido('${v.id}',this.value)" class="mini-input" style="width:auto;padding:4px 8px;"><option value="activo" ${v.estadoPedido==='activo'?'selected':''}>Activo</option><option value="entregado" ${v.estadoPedido==='entregado'?'selected':''}>Entregado</option></select></td>
     <td>${v.tipo==='domicilio'?domiciliarioSelect(v):'—'}</td>
@@ -1616,7 +1639,7 @@ function renderPedidosTable(vs){
       ${['admin','supervisor'].includes(STATE.user.rol) && v.items.length>1?`<button class="btn btn-ghost btn-sm" onclick="abrirQuitarProducto('${v.id}')" title="Quitar un producto">${ic('i-menu-food')}−</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="reimprimirComanda('${v.id}')" title="Reimprimir comanda (cocina)">${ic('i-chef')}</button>
       <button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')" title="Reimprimir factura">${ic('i-print')}</button>
-      ${(v.estado==='pagada'||v.estado==='por_verificar') && ['admin','supervisor','cajero'].includes(STATE.user.rol)?`<button class="btn btn-ghost btn-sm" onclick="abrirEditarPago('${v.id}')" title="Editar forma de pago">${ic('i-cash')}✎</button>`:''}
+      ${puedeEditarPago(v)?`<button class="btn ${pagoDescuadrado(v)?'btn-danger':'btn-ghost'} btn-sm" onclick="abrirEditarPago('${v.id}')" title="Cambiar forma de pago">${ic('i-cash')}✎</button>`:''}
       ${(v.tipo==='domicilio' ? STATE.user.rol==='admin' : (isAdmin||STATE.user.rol==='jefe'))?`<button class="btn btn-danger btn-sm" onclick="anularVenta('${v.id}')" title="${v.tipo==='domicilio'?'Eliminar domicilio':'Anular'}">${ic('i-ban')}</button>`:''}
       ${['admin','supervisor'].includes(STATE.user.rol)?`<button class="btn btn-danger btn-sm" onclick="eliminarDefinitivo('${v.id}')" title="Eliminar factura por completo">${ic('i-trash')}</button>`:''}
     </td></tr>`;}).join('')}
@@ -1701,214 +1724,265 @@ function editarPedido(id){
   showPage('ventas');
 }
 
-let cobrandoMesaId=null, cobroComida=0, cobroTotalCliente=0;
+// ============================================================
+// COBRO Y CAMBIO DE FORMA DE PAGO (v3)
+// Cada peso va a su concepto, SIN suposiciones:
+//  • El cajero escribe cuánto paga el cliente en efectivo / tarjeta / banco (sin recargo).
+//  • La PROPINA sale del método que se marque.  • El DOMICILIO sale del método que se marque
+//    (o lo cobra el domiciliario directo).  • El RECARGO del datáfono va siempre a tarjeta.
+//  • Lo que queda en cada método es la VENTA (comida) del negocio.
+// La misma pantalla sirve para cobrar y para cambiar la forma de pago después.
+// Tarjeta y banco quedan "por verificar" hasta confirmar el comprobante.
+// ============================================================
+let cobrandoMesaId=null, cobroModo='cobrar', _modoRecargo='pct', _cobroEnCurso=false;
+function _num(id){ const el=document.getElementById(id); return el?(parseFloat(el.value)||0):0; }
+function _val(id){ const el=document.getElementById(id); return el?el.value:''; }
+function _set(id,v){ const el=document.getElementById(id); if(el) el.value=v; }
+function _txt(id,html){ const el=document.getElementById(id); if(el) el.innerHTML=html; }
+// El domicilio entra por un medio electrónico (y se le paga al domiciliario en efectivo del cajón)
+function domMetodoDe(dom, forma){ return (dom>0 && (forma==='banco'||forma==='tarjeta')) ? forma : null; }
+
+// Reparte un cobro. o = {comida, propina, propinaMetodo, dom, domForma, base:{efectivo,tarjeta,banco}, recargo}
+function calcularReparto(o){
+  const errores=[];
+  const domMetodo=domMetodoDe(o.dom, o.domForma);
+  const base={ efectivo:Math.max(0,o.base.efectivo||0), tarjeta:Math.max(0,o.base.tarjeta||0), banco:Math.max(0,o.base.banco||0) };
+  const recargo=Math.max(0,o.recargo||0);
+  const totalBase=(o.comida||0)+(o.propina||0)+(domMetodo?o.dom:0);
+  const sumaBase=base.efectivo+base.tarjeta+base.banco;
+  // Extras (no son del negocio) por método
+  const extra={efectivo:0,tarjeta:0,banco:0};
+  if(o.propina>0) extra[o.propinaMetodo||'efectivo']+=o.propina;
+  if(domMetodo) extra[domMetodo]+=o.dom;
+  const pagosVenta={};
+  METODOS_PAGO.forEach(([k])=>{ pagosVenta[k]=Math.round(base[k]-extra[k]); });
+  if(sumaBase<=0) errores.push('Indique cómo paga el cliente');
+  else if(Math.abs(sumaBase-totalBase)>=1) errores.push(sumaBase<totalBase?`Falta ${fmtMoney(totalBase-sumaBase)}`:`Sobra ${fmtMoney(sumaBase-totalBase)} (revise)`);
+  else {
+    if(o.propina>0 && pagosVenta[o.propinaMetodo||'efectivo']<0) errores.push(`El pago en ${nombreMetodo(o.propinaMetodo).toLowerCase()} no alcanza para la propina`);
+    if(domMetodo && pagosVenta[domMetodo]<0) errores.push(`El pago en ${nombreMetodo(domMetodo).toLowerCase()} no alcanza para el domicilio`);
+    if(!errores.length && METODOS_PAGO.some(([k])=>pagosVenta[k]<0)) errores.push('Revise los montos: la propina o el domicilio no cuadran con la forma de pago');
+  }
+  if(recargo>0 && base.tarjeta<=0) errores.push('El recargo del datáfono solo aplica si hay pago con tarjeta');
+  const pagos={ efectivo:base.efectivo, tarjeta:base.tarjeta+recargo, banco:base.banco };
+  const pagosExtra={ efectivo:extra.efectivo, tarjeta:extra.tarjeta+recargo, banco:extra.banco };
+  // Lo que se le paga en EFECTIVO del cajón a terceros: propina y domicilio que entraron por banco/tarjeta
+  const extraSaleEfectivo=((o.propina>0 && (o.propinaMetodo||'efectivo')!=='efectivo')?o.propina:0)+(domMetodo?o.dom:0);
+  return { errores, domMetodo, totalBase, totalCobrar:totalBase+recargo, recargo, pagos, pagosVenta, pagosExtra, extraSaleEfectivo };
+}
+// Recargo según lo que escribió el cajero: % o total pasado por el datáfono
+function calcRecargo(tarjeta){
+  if(tarjeta<=0) return 0;
+  if(_modoRecargo==='total'){ const t=_num('cobro-datafono'); return t>tarjeta?Math.round(t-tarjeta):0; }
+  const pct=_num('cobro-recargo-pct'); return pct>0?Math.round(tarjeta*pct/100/50)*50:0;
+}
+function recargoDesde(modo){ _modoRecargo=modo; actualizarTotalCobro(); }
+function datosCobro(){
+  const v=(DB.get('ventas')||[]).find(x=>x.id===cobrandoMesaId);
+  const dom=v?(v.valorDom||0):0;
+  const base={ efectivo:_num('pago-efectivo'), tarjeta:_num('pago-tarjeta'), banco:_num('pago-banco') };
+  return { v, comida:v?(v.total||0):0, propina:Math.max(0,_num('cobro-propina')), propinaMetodo:_val('cobro-propina-metodo')||'efectivo',
+    dom, domForma:dom>0?(_val('cobro-dom-forma')||'efectivo_directo'):null, base, recargo:calcRecargo(base.tarjeta) };
+}
+// ¿Quién puede cambiar la forma de pago? admin/supervisor/jefe/cajero con la caja del pedido abierta; caja cerrada: solo admin.
+function puedeEditarPago(v){
+  if(!v || !STATE.user) return false;
+  if(!(v.estado==='pagada'||v.estado==='por_verificar')) return false;
+  if(!(DB.get('ventas')||[]).some(x=>x.id===v.id)) return false; // los archivados no se editan
+  const rol=STATE.user.rol; const caja=DB.get('caja_actual');
+  if(caja && v.cajaId===caja.id) return ['admin','supervisor','jefe','cajero'].includes(rol);
+  return rol==='admin';
+}
+// El pago ya no cuadra con el pedido (p. ej. se agregó un producto después de cobrar)
+function pagoDescuadrado(v){
+  if(!(v.estado==='pagada'||v.estado==='por_verificar') || !v.pagos || typeof v.pagos!=='object') return false;
+  const p=v.pagos; const suma=(p.efectivo||0)+(p.tarjeta||0)+(p.banco||0);
+  const domE=(v.valorDom>0 && v.domPorBanco)?v.valorDom:0;
+  return Math.abs(suma-((v.total||0)+(v.propina||0)+(v.recargo||0)+domE))>=1;
+}
+function deducirPropinaMetodo(v){
+  if(v.propinaMetodo) return v.propinaMetodo;
+  if(!(v.propina>0) || !v.pagosExtra) return 'efectivo';
+  const ex={efectivo:v.pagosExtra.efectivo||0, tarjeta:(v.pagosExtra.tarjeta||0)-(v.recargo||0), banco:v.pagosExtra.banco||0};
+  if(v.domPorBanco){ const f=v.domFormaPago==='tarjeta'?'tarjeta':'banco'; ex[f]-=(v.valorDom||0); }
+  for(const k of ['efectivo','tarjeta','banco']) if(ex[k]>=v.propina-0.5) return k;
+  return 'efectivo';
+}
+function resumenPago(v){
+  const p=v.pagos||{};
+  return { efectivo:p.efectivo||0, tarjeta:p.tarjeta||0, banco:p.banco||0, recargo:v.recargo||0, propina:v.propina||0,
+    propinaMetodo:v.propinaMetodo||'efectivo', domFormaPago:v.domFormaPago||'', totalCobrado:v.totalCobrado||0 };
+}
+function textoPagos(p){ return METODOS_PAGO.filter(([k])=>(p[k]||0)>0).map(([k,l])=>`${l} ${fmtMoney(p[k])}`).join(' + ')||'—'; }
+
+function prepararModalCobro(v, modo){
+  cobrandoMesaId=v.id; cobroModo=modo; _modoRecargo='pct'; _cobroEnCurso=false;
+  const ref = v.tipo==='mesa'?v.mesa : (v.cliNombre||refCocina(v));
+  const extra = v.valorDom>0?` + domicilio ${fmtMoney(v.valorDom)}`:'';
+  _txt('cobro-mesa-info', `<strong>${escapeHtml(ref||'')}</strong> · ${(v.items||[]).length} platos · Comida <span class="text-gold font-bold">${fmtMoney(v.total)}</span>${extra}`);
+  _txt('cobro-titulo', `${ic('i-cash')} ${modo==='editar'?'Cambiar forma de pago':'Cobrar'}`);
+  const btn=document.getElementById('btn-confirmar-cobro'); if(btn){ btn.disabled=false; btn.innerHTML=`${ic('i-check')} ${modo==='editar'?'Guardar cambios':'Cobrar'}`; }
+  ['cobro-recibido','cobro-recargo-pct','cobro-datafono','pago-efectivo','pago-tarjeta','pago-banco'].forEach(i=>_set(i,''));
+}
 function abrirCobroMesa(id){
   if(STATE.user.rol==='mesero' || STATE.user.rol==='impresiones'){ toast('Este usuario no puede cobrar. El cajero realiza el cobro.','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  cobrandoMesaId=id; cobroComida=v.total||0;
-  const ref = v.tipo==='mesa'?v.mesa : (v.cliNombre||refCocina(v));
-  const extra = v.valorDom>0?` + domicilio ${fmtMoney(v.valorDom)}`:'';
-  document.getElementById('cobro-mesa-info').innerHTML=`<strong>${escapeHtml(ref)}</strong> · ${v.items.length} platos · Comida <span class="text-gold font-bold">${fmtMoney(v.total)}</span>${extra}`;
-  ['cobro-propina','cobro-recargo','pago-efectivo','pago-tarjeta','pago-banco'].forEach(i=>{ const el=document.getElementById(i); if(el) el.value=''; });
-  document.getElementById('cobro-propina').value=0;
-  document.getElementById('cobro-recargo').value=0;
-  const domFormaEl=document.getElementById('cobro-dom-forma'); if(domFormaEl) domFormaEl.value='efectivo_directo';
+  if(v.estado!=='abierta'){ toast('Este pedido ya fue cobrado','info'); return; }
+  prepararModalCobro(v,'cobrar');
+  _set('cobro-propina',0); _set('cobro-propina-metodo','efectivo'); _set('cobro-dom-forma','efectivo_directo');
+  const aj=document.getElementById('cobro-ajuste'); if(aj) aj.style.display='none';
   openModal('modal-cobro');
   actualizarTotalCobro();
 }
-// Calcula el TOTAL que el cliente debe pagar en caja según las reglas.
-function actualizarTotalCobro(){
-  const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
-  const recargo=parseFloat(document.getElementById('cobro-recargo')?.value)||0;
-  const v=(DB.get('ventas')||[]).find(x=>x.id===cobrandoMesaId);
-  const dom=v?(v.valorDom||0):0;
-  // Cuadro de domicilio: solo si hay domicilio
-  const domBox=document.getElementById('cobro-domicilio-box');
-  if(domBox) domBox.style.display = dom>0 ? 'block':'none';
-  const domValorSpan=document.getElementById('cobro-dom-valor'); if(domValorSpan) domValorSpan.textContent=fmtMoney(dom);
-  const domForma=document.getElementById('cobro-dom-forma')?.value||'efectivo_directo';
-  // REGLA: el domicilio EN EFECTIVO no entra a caja (lo cobra el domiciliario directo).
-  // El domicilio POR BANCO sí entra (el cliente lo transfiere junto con la comida).
-  const domEnTotal = (dom>0 && domForma==='banco') ? dom : 0;
-  // Ayuda visual
-  const ayuda=document.getElementById('cobro-dom-ayuda');
-  if(ayuda){ ayuda.textContent = domForma==='banco'
-    ? 'El cliente transfiere comida + domicilio. Luego le pagas al domiciliario en efectivo del cajón (el sistema lo descuenta solo).'
-    : 'El cliente le paga el domicilio en efectivo al domiciliario. No pasa por la caja.'; }
-  // Total a cobrar = comida + propina + recargo + (domicilio solo si es por banco)
-  cobroTotalCliente = cobroComida + propina + recargo + domEnTotal;
-  const el=document.getElementById('cobro-total-final');
-  if(el) el.textContent=fmtMoney(cobroTotalCliente);
-  const queCobrar=document.getElementById('cobro-que-cobrar');
-  if(queCobrar) queCobrar.textContent = dom>0 ? (domEnTotal>0?'(comida + domicilio + extras)':'(comida + extras; domicilio aparte)') : '';
-  actualizarRepartoCobro();
-}
-// Verifica que lo repartido en métodos cuadre con el total a cobrar.
-function actualizarRepartoCobro(){
-  const ef=parseFloat(document.getElementById('pago-efectivo')?.value)||0;
-  const ta=parseFloat(document.getElementById('pago-tarjeta')?.value)||0;
-  const ba=parseFloat(document.getElementById('pago-banco')?.value)||0;
-  // Mostrar cada monto con punto de miles debajo del campo (más fácil de leer al cobrar)
-  const pe=document.getElementById('prev-efectivo'); if(pe) pe.textContent = ef>0?fmtMoney(ef):'';
-  const pt=document.getElementById('prev-tarjeta'); if(pt) pt.textContent = ta>0?fmtMoney(ta):'';
-  const pb=document.getElementById('prev-banco'); if(pb) pb.textContent = ba>0?fmtMoney(ba):'';
-  const suma=ef+ta+ba;
-  const msg=document.getElementById('cobro-reparto-msg');
-  if(!msg) return;
-  const falta=cobroTotalCliente-suma;
-  if(suma===0){ msg.innerHTML='<span class="text-gray">Escriba cómo paga el cliente</span>'; }
-  else if(Math.abs(falta)<1){ msg.innerHTML='<span class="text-green font-bold">✓ Pago completo · '+fmtMoney(suma)+'</span>'; }
-  else if(falta>0){ msg.innerHTML=`<span class="text-gold">Falta ${fmtMoney(falta)}</span>`; }
-  else { msg.innerHTML=`<span class="text-red">Sobra ${fmtMoney(Math.abs(falta))} (revise)</span>`; }
-}
-// Confirma el cobro: separa comida, propina, recargo y domicilio en sus métodos.
-function confirmarCobroMesa(){
-  const id=cobrandoMesaId; if(!id) return;
-  const propina=parseFloat(document.getElementById('cobro-propina')?.value)||0;
-  const recargo=parseFloat(document.getElementById('cobro-recargo')?.value)||0;
-  const pagos={ efectivo:parseFloat(document.getElementById('pago-efectivo')?.value)||0,
-    tarjeta:parseFloat(document.getElementById('pago-tarjeta')?.value)||0,
-    banco:parseFloat(document.getElementById('pago-banco')?.value)||0 };
-  const suma=pagos.efectivo+pagos.tarjeta+pagos.banco;
-  if(suma<=0){ toast('Indique cómo paga el cliente','error'); return; }
-  if(Math.abs(cobroTotalCliente-suma)>=1){ toast('Lo pagado no cuadra con el total a cobrar','error'); return; }
-  const vs=DB.get('ventas')||[];
-  const v=vs.find(x=>x.id===id); if(!v){ closeModal('modal-cobro'); return; }
-  const dom=v.valorDom||0;
-  const domForma=document.getElementById('cobro-dom-forma')?.value||'efectivo_directo';
-  const comida=v.total||0;
-  const domPorBanco = (dom>0 && domForma==='banco');
-
-  // ===== SEPARACIÓN DE CONCEPTOS (POS profesional) =====
-  // El total recibido = comida + propina + recargo + (domicilio si es por banco).
-  // Repartimos cada peso a su concepto. La COMIDA se cubre primero, en orden:
-  // efectivo → tarjeta → banco. El resto (propina+recargo+domicilio) es "extra" (no del negocio).
-  let restante={ efectivo:pagos.efectivo, tarjeta:pagos.tarjeta, banco:pagos.banco };
-  const pagosVenta={ efectivo:0, tarjeta:0, banco:0 }; // solo comida
-  // Cubrir la comida tomando de cada método disponible
-  let porCubrir=comida;
-  for(const k of ['efectivo','tarjeta','banco']){
-    if(porCubrir<=0) break;
-    const toma=Math.min(restante[k], porCubrir);
-    pagosVenta[k]+=toma; restante[k]-=toma; porCubrir-=toma;
-  }
-  // Lo que queda en 'restante' es propina + recargo + domicilio-banco (no es venta del negocio)
-  const pagosExtra={ efectivo:restante.efectivo, tarjeta:restante.tarjeta, banco:restante.banco };
-
-  // ===== EXTRAS QUE SALEN DEL CAJÓN =====
-  // Solo la PROPINA y el DOMICILIO que entran por banco/tarjeta se pagan al mesero/domiciliario
-  // en EFECTIVO del cajón → ese efectivo sale. El RECARGO del datáfono NO sale del cajón:
-  // se lo queda el banco/datáfono, no se le paga a nadie en efectivo.
-  // Entonces: extraSaleEfectivo = (propina + domicilio-por-banco) que entró por electrónico.
-  const extraElectronicoTotal = (pagosExtra.banco||0) + (pagosExtra.tarjeta||0);
-  // El recargo que entró por electrónico NO sale del cajón. Lo restamos del total electrónico.
-  // (El recargo casi siempre se paga por tarjeta/banco, que es donde aplica el datáfono.)
-  const recargoElectronico = Math.min(recargo, extraElectronicoTotal);
-  const extraSaleEfectivo = Math.max(0, extraElectronicoTotal - recargoElectronico);
-
-  // Guardar todo separado y claro
-  v.comida=comida;
-  v.ventaReal=comida;        // compatibilidad con reportes existentes
-  v.propina=propina;         // va al mesero
-  v.recargo=recargo;         // recargo datáfono (no es del negocio)
-  v.extraSaleEfectivo=extraSaleEfectivo;  // propina/recargo/domicilio por banco que se pagan en efectivo
-  v.valorDom=dom;
-  v.domFormaPago = dom>0 ? domForma : null;
-  v.domPorBanco = domPorBanco;   // si entró por banco → se paga al domiciliario en efectivo
-  v.pagos=pagos;             // total que puso el cliente por método
-  v.pagosVenta=pagosVenta;   // SOLO comida por método (lo que es venta real)
-  v.pagosExtra=pagosExtra;   // propina+recargo+domicilio por método
-  v.totalCobrado=suma;
-  v.metodo=Object.entries(pagosVenta).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo';
-  v.fechaCobro=now(); v.cobradoPor=STATE.user.nombre;
-  v.cajaId=DB.get('caja_actual')?.id||v.cajaId||null;
-  if(!v.factura && v.tipo!=='domicilio') v.factura=nextFactura();
-
-  // Si entró dinero por banco, queda PENDIENTE de verificar el comprobante
-  const requiereVerif = pagos.banco>0;
-  if(requiereVerif){
-    v.estado='por_verificar';
-    fusionarYGuardarVentas(vs);
-    closeModal('modal-cobro'); cobrandoMesaId=null;
-    toast('Pago registrado. Verifica el comprobante del Banco en Pedidos.','info');
-    showPage('pedidos'); return;
-  }
-  v.estado='pagada';
-  fusionarYGuardarVentas(vs);
-  const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre);
-  closeModal('modal-cobro'); cobrandoMesaId=null;
-  toast(`${ref} cobrada`,'success');
-  printFactura(v);
-  showPage('pedidos');
-}
-// ===== EDITAR FORMA DE PAGO (después de cobrado) =====
-let editandoPagoId=null;
+// Cambiar la forma de pago de un pedido YA cobrado (misma pantalla, con los datos cargados)
 function abrirEditarPago(id){
-  if(!['admin','supervisor','cajero'].includes(STATE.user.rol)){ toast('No autorizado','error'); return; }
   const v=(DB.get('ventas')||[]).find(x=>x.id===id); if(!v) return;
-  editandoPagoId=id;
-  const p=v.pagos||{efectivo:0,tarjeta:0,banco:0};
-  document.getElementById('editpago-info').innerHTML=`<strong>${escapeHtml(refPedido(v))}</strong> · Total cobrado: <span class="text-gold">${fmtMoney(v.totalCobrado||v.total)}</span>`;
-  document.getElementById('editpago-efectivo').value=p.efectivo||0;
-  document.getElementById('editpago-tarjeta').value=p.tarjeta||0;
-  document.getElementById('editpago-banco').value=p.banco||0;
-  actualizarEditPago();
-  openModal('modal-editpago');
-}
-function actualizarEditPago(){
-  const v=(DB.get('ventas')||[]).find(x=>x.id===editandoPagoId); if(!v) return;
-  const ef=parseFloat(document.getElementById('editpago-efectivo')?.value)||0;
-  const ta=parseFloat(document.getElementById('editpago-tarjeta')?.value)||0;
-  const ba=parseFloat(document.getElementById('editpago-banco')?.value)||0;
-  const suma=ef+ta+ba;
-  const objetivo=v.totalCobrado||v.total||0;
-  const msg=document.getElementById('editpago-msg');
-  const dif=objetivo-suma;
-  if(Math.abs(dif)<1){ msg.innerHTML='<span class="text-green font-bold">✓ Cuadra con el total</span>'; }
-  else if(dif>0){ msg.innerHTML=`<span class="text-gold">Falta ${fmtMoney(dif)}</span>`; }
-  else { msg.innerHTML=`<span class="text-red">Sobra ${fmtMoney(Math.abs(dif))}</span>`; }
-}
-function guardarEditPago(){
-  const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===editandoPagoId); if(!v){ closeModal('modal-editpago'); return; }
-  const ef=parseFloat(document.getElementById('editpago-efectivo')?.value)||0;
-  const ta=parseFloat(document.getElementById('editpago-tarjeta')?.value)||0;
-  const ba=parseFloat(document.getElementById('editpago-banco')?.value)||0;
-  const suma=ef+ta+ba;
-  const objetivo=v.totalCobrado||v.total||0;
-  if(Math.abs(objetivo-suma)>=1){ toast('El pago debe sumar el total cobrado','error'); return; }
-  // Recalcular pagosVenta (solo comida) y pagosExtra (propina+recargo+domicilio)
-  const comida=v.total||0;
-  let restante={efectivo:ef,tarjeta:ta,banco:ba};
-  const pagosVenta={efectivo:0,tarjeta:0,banco:0};
-  let porCubrir=comida;
-  for(const k of ['efectivo','tarjeta','banco']){
-    if(porCubrir<=0) break;
-    const toma=Math.min(restante[k],porCubrir);
-    pagosVenta[k]+=toma; restante[k]-=toma; porCubrir-=toma;
+  if(!puedeEditarPago(v)){ toast(STATE.user.rol==='admin'?'Este pedido no se puede editar':'Solo el administrador puede cambiar el pago de una caja ya cerrada','error'); return; }
+  prepararModalCobro(v,'editar');
+  const p=v.pagos||{};
+  const tienePagos=(p.efectivo||0)+(p.tarjeta||0)+(p.banco||0)>0;
+  const recargo=v.recargo||0;
+  if(tienePagos){
+    _set('pago-efectivo', p.efectivo||''); _set('pago-banco', p.banco||'');
+    const tBase=Math.max(0,(p.tarjeta||0)-recargo); _set('pago-tarjeta', tBase||'');
+    if(recargo>0 && tBase>0){ _modoRecargo='total'; _set('cobro-datafono', p.tarjeta); }
+  } else {
+    _set('pago-'+(v.metodo||'efectivo'), v.totalCobrado||v.total||'');
   }
-  const pagosExtra={efectivo:restante.efectivo,tarjeta:restante.tarjeta,banco:restante.banco};
-  // El recargo del datáfono NO sale del cajón (se lo queda el banco). Solo propina+domicilio por banco.
-  const extraElectronicoTotal=(pagosExtra.banco||0)+(pagosExtra.tarjeta||0);
-  const recargoElectronico=Math.min(v.recargo||0, extraElectronicoTotal);
-  const extraSaleEfectivo=Math.max(0, extraElectronicoTotal - recargoElectronico);
-  const pagoAntes=v.metodo;
-  v.pagos={efectivo:ef,tarjeta:ta,banco:ba};
-  v.pagosVenta=pagosVenta;
-  v.pagosExtra=pagosExtra;
-  v.extraSaleEfectivo=extraSaleEfectivo;
-  v.metodo=Object.entries(pagosVenta).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo';
-  // Si ahora hay banco, vuelve a por_verificar; si no, pagada
-  v.estado = ba>0 ? 'por_verificar' : 'pagada';
-  v.pagoEditadoPor=STATE.user.nombre; v.pagoEditadoEn=now();
-  fusionarYGuardarVentas(vs);
-  logAudit('Editó forma de pago',`${refPedido(v)}: ahora efectivo ${fmtMoney(ef)}, tarjeta ${fmtMoney(ta)}, banco ${fmtMoney(ba)} (por ${STATE.user.nombre})`);
-  closeModal('modal-editpago'); editandoPagoId=null;
-  toast('Forma de pago actualizada','success');
-  showPage('pedidos');
+  _set('cobro-propina', v.propina||0); _set('cobro-propina-metodo', deducirPropinaMetodo(v));
+  // Forma del domicilio. Antes no existía "tarjeta": los pagados con datáfono quedaban como "banco".
+  let domForma=v.domFormaPago || (v.domPorBanco?'banco':'efectivo_directo');
+  if(v.valorDom>0 && (domForma==='banco'||domForma==='tarjeta') && tienePagos){
+    const disp=k=>(p[k]||0)-(k==='tarjeta'?recargo:0);
+    if(disp(domForma)<v.valorDom){ if(disp('tarjeta')>=v.valorDom) domForma='tarjeta'; else if(disp('banco')>=v.valorDom) domForma='banco'; }
+  }
+  _set('cobro-dom-forma', domForma);
+  if(v.efectivoRecibido) _set('cobro-recibido', v.efectivoRecibido);
+  const aj=document.getElementById('cobro-ajuste');
+  if(aj){
+    const descu=pagoDescuadrado(v);
+    aj.innerHTML=`Cobrado antes: <strong>${fmtMoney(v.totalCobrado||0)}</strong> (${textoPagos(p)}).`
+      +(descu?`<br><strong class="text-orange">⚠ El pedido cambió después de cobrar.</strong> Ajuste el pago al nuevo valor: cobre o devuelva la diferencia.`:'')
+      +`<br>Queda registrado quién lo cambió y cuándo.`;
+    aj.style.display='block';
+  }
+  openModal('modal-cobro');
+  actualizarTotalCobro();
+}
+function cerrarCobro(){ closeModal('modal-cobro'); cobrandoMesaId=null; cobroModo='cobrar'; _cobroEnCurso=false; }
+// Botones "Todo efectivo / tarjeta / banco"
+function pagoRapido(m){
+  const d=datosCobro(); if(!d.v) return;
+  if(d.dom>0) _set('cobro-dom-forma', m==='efectivo'?'efectivo_directo':m);
+  if(d.propina>0) _set('cobro-propina-metodo', m);
+  const d2=datosCobro();
+  const total=d2.comida+d2.propina+(domMetodoDe(d2.dom,d2.domForma)?d2.dom:0);
+  METODOS_PAGO.forEach(([k])=>_set('pago-'+k, k===m?total:''));
+  if(m!=='tarjeta'){ _set('cobro-recargo-pct',''); _set('cobro-datafono',''); _modoRecargo='pct'; }
+  actualizarTotalCobro();
+  const el=document.getElementById(m==='tarjeta'?'cobro-recargo-pct':m==='efectivo'?'cobro-recibido':'pago-banco'); if(el) el.focus();
+}
+// Recalcula todo lo que se ve en la pantalla de cobro
+function actualizarTotalCobro(){
+  const d=datosCobro(); if(!d.v) return;
+  const r=calcularReparto(d);
+  // Domicilio
+  const domBox=document.getElementById('cobro-domicilio-box'); if(domBox) domBox.style.display=d.dom>0?'block':'none';
+  _txt('cobro-dom-valor', fmtMoney(d.dom));
+  _txt('cobro-dom-ayuda', !d.dom?'' : d.domForma==='efectivo_directo'
+    ? 'El cliente le paga el domicilio en efectivo al domiciliario. No pasa por la caja.'
+    : `Entra por ${d.domForma} junto con la comida. Al domiciliario se le paga en efectivo del cajón (el sistema lo descuenta solo).`);
+  _txt('cobro-que-cobrar', d.dom>0?(r.domMetodo?'(comida + domicilio + propina)':'(comida + propina; domicilio aparte)'):'(comida + propina)');
+  _txt('cobro-total-base', fmtMoney(r.totalBase));
+  // Montos con punto de miles
+  METODOS_PAGO.forEach(([k])=>_txt('prev-'+k, d.base[k]>0?fmtMoney(d.base[k]):''));
+  // Recargo (solo con tarjeta)
+  const recBox=document.getElementById('cobro-recargo-box');
+  if(recBox) recBox.style.display=d.base.tarjeta>0?'block':'none';
+  if(d.base.tarjeta>0){
+    _txt('cobro-recargo-base', `(sobre ${fmtMoney(d.base.tarjeta)} con tarjeta)`);
+    const act=document.activeElement&&document.activeElement.id;
+    if(_modoRecargo==='pct'){ if(act!=='cobro-datafono') _set('cobro-datafono', r.recargo>0?d.base.tarjeta+r.recargo:''); }
+    else if(act!=='cobro-recargo-pct'){ _set('cobro-recargo-pct', r.recargo>0?Math.round(r.recargo/d.base.tarjeta*1000)/10:''); }
+    const malTotal=_modoRecargo==='total' && _num('cobro-datafono')>0 && _num('cobro-datafono')<d.base.tarjeta;
+    _txt('cobro-recargo-txt', malTotal?'<span class="text-red">El total del datáfono no puede ser menor que lo pagado con tarjeta.</span>'
+      : r.recargo>0?`Recargo: <strong class="text-gold">${fmtMoney(r.recargo)}</strong> · Pase por el datáfono <strong>${fmtMoney(d.base.tarjeta+r.recargo)}</strong>`:'<span class="text-gray">Sin recargo. Escriba el % o el total que pasó por el datáfono.</span>');
+  }
+  // Vueltas (efectivo)
+  const efBox=document.getElementById('cobro-efectivo-box'); if(efBox) efBox.style.display=d.base.efectivo>0?'block':'none';
+  const recibido=_num('cobro-recibido');
+  _txt('cobro-vueltas', !recibido?'' : recibido<d.base.efectivo?`<span class="text-red">Faltan ${fmtMoney(d.base.efectivo-recibido)}</span>`:`Vueltas: <strong class="text-green">${fmtMoney(recibido-d.base.efectivo)}</strong>`);
+  // Total y estado
+  _txt('cobro-total-final', fmtMoney(r.totalCobrar));
+  _txt('cobro-reparto-msg', r.errores.length
+    ? (r.errores[0]==='Indique cómo paga el cliente'?'<span class="text-gray">Escriba cómo paga el cliente</span>':`<span class="${r.errores[0].startsWith('Falta')?'text-gold':'text-red'}">${r.errores[0]}</span>`)
+    : `<span class="text-green font-bold">✓ Pago completo · ${textoPagos(r.pagos)}</span>`);
+}
+function actualizarRepartoCobro(){ actualizarTotalCobro(); }
+// Confirma el cobro (o el cambio de forma de pago)
+function confirmarCobroMesa(){
+  if(_cobroEnCurso) return;               // evita doble clic = doble cobro
+  const d=datosCobro(); const v=d.v;
+  if(!v){ cerrarCobro(); return; }
+  const editando=cobroModo==='editar';
+  if(!editando && v.estado!=='abierta'){ toast('Este pedido ya fue cobrado','error'); cerrarCobro(); showPage('pedidos'); return; }
+  if(editando && !puedeEditarPago(v)){ toast('No autorizado para cambiar este pago','error'); return; }
+  const r=calcularReparto(d);
+  if(_modoRecargo==='total' && d.base.tarjeta>0 && _num('cobro-datafono')>0 && _num('cobro-datafono')<d.base.tarjeta){ toast('El total del datáfono no puede ser menor que lo pagado con tarjeta','error'); return; }
+  if(r.errores.length){ toast(r.errores[0],'error'); return; }
+  _cobroEnCurso=true;
+  const btn=document.getElementById('btn-confirmar-cobro'); if(btn) btn.disabled=true;
+  try{
+    const vs=DB.get('ventas')||[];
+    const antes=resumenPago(v);
+    const caja=DB.get('caja_actual');
+    const cajaDelPedidoAbierta=!!(caja && v.cajaId===caja.id);
+    v.comida=d.comida; v.ventaReal=d.comida;
+    v.propina=d.propina; v.propinaMetodo=d.propina>0?d.propinaMetodo:null;
+    v.recargo=r.recargo; v.recargoPct=(r.recargo>0&&d.base.tarjeta>0)?Math.round(r.recargo/d.base.tarjeta*1000)/10:null;
+    v.valorDom=d.dom; v.domFormaPago=d.dom>0?d.domForma:null; v.domPorBanco=!!r.domMetodo;
+    v.pagos=r.pagos; v.pagosVenta=r.pagosVenta; v.pagosExtra=r.pagosExtra;
+    v.extraSaleEfectivo=r.extraSaleEfectivo; v.totalCobrado=r.totalCobrar;
+    const recibido=_num('cobro-recibido');
+    v.efectivoRecibido=(recibido>0&&d.base.efectivo>0)?recibido:null;
+    v.vueltas=(recibido>0&&d.base.efectivo>0)?Math.max(0,recibido-d.base.efectivo):null;
+    const principal=Object.entries(r.pagosVenta).sort((a,b)=>b[1]-a[1])[0];
+    v.metodo=(principal&&principal[1]>0)?principal[0]:(Object.entries(r.pagos).sort((a,b)=>b[1]-a[1])[0][0]||'efectivo');
+    const electronico=(r.pagos.tarjeta||0)+(r.pagos.banco||0);
+    if(!editando){
+      v.fechaCobro=now(); v.cobradoPor=STATE.user.nombre;
+      v.cajaId=caja?.id||v.cajaId||null;
+      if(!v.factura && v.tipo!=='domicilio') v.factura=nextFactura();
+      v.estado = electronico>0 ? 'por_verificar' : 'pagada';
+    } else {
+      const cambioElectronico = antes.tarjeta!==r.pagos.tarjeta || antes.banco!==r.pagos.banco;
+      // Caja ya cerrada (solo admin): se da por verificado, ya no se puede verificar desde Pedidos
+      if(!cajaDelPedidoAbierta) v.estado='pagada';
+      else v.estado = electronico>0 ? ((v.estado==='pagada' && !cambioElectronico)?'pagada':'por_verificar') : 'pagada';
+      v.pagoEditadoPor=STATE.user.nombre; v.pagoEditadoEn=now();
+      v.historialPagos=[...(Array.isArray(v.historialPagos)?v.historialPagos:[]), {fecha:now(), por:STATE.user.nombre, antes, despues:resumenPago(v)}].slice(-20);
+    }
+    fusionarYGuardarVentas(vs);
+    const ref=v.tipo==='mesa'?v.mesa:(v.factura||v.cliNombre||refPedido(v));
+    if(editando){
+      logAudit('Cambió forma de pago',`${refPedido(v)}: antes ${textoPagos(antes)} → ahora ${textoPagos(v.pagos)}${v.recargo?' (recargo '+fmtMoney(v.recargo)+')':''} (por ${STATE.user.nombre})`);
+      toast(v.estado==='por_verificar'?'Pago actualizado. Verifique el comprobante en Pedidos.':'Forma de pago actualizada','success');
+    } else if(v.estado==='por_verificar'){
+      toast(`Pago registrado. Verifique el comprobante de ${r.pagos.tarjeta>0&&r.pagos.banco>0?'tarjeta y banco':r.pagos.tarjeta>0?'tarjeta':'banco'} en Pedidos.`,'info');
+    } else {
+      toast(`${ref} cobrada`,'success');
+      printFactura(v);
+    }
+    cerrarCobro();
+    showPage(STATE.page==='historial'?'historial':'pedidos');
+  } finally {
+    _cobroEnCurso=false; if(btn) btn.disabled=false;
+  }
 }
 function verificarPago(id){
   const vs=DB.get('ventas')||[]; const v=vs.find(x=>x.id===id); if(!v) return;
-  if(!confirm('¿Confirma que ya verificó el comprobante de pago (Banco) y el dinero está recibido?')) return;
+  const p=v.pagos||{}; const medios=[(p.tarjeta||0)>0?'Tarjeta '+fmtMoney(p.tarjeta):'', (p.banco||0)>0?'Banco '+fmtMoney(p.banco):''].filter(Boolean).join(' y ');
+  if(!confirm(`¿Confirma que ya verificó el comprobante de pago (${medios||'Banco/Tarjeta'}) y el dinero está recibido?`)) return;
   v.estado='pagada'; v.verificadoPor=STATE.user.nombre; v.fechaVerif=now();
   fusionarYGuardarVentas(vs);
   toast('Pago verificado','success');
@@ -2286,8 +2360,11 @@ function caja(){
   <p class="text-xs text-gray" style="margin:-4px 0 10px;">${ic('i-cash')} VENTA (solo comida) recibida por cada método. Total venta: <strong class="text-gold">${fmtMoney(totalVentaPorMetodo)}</strong>.${totalDomBanco>0?` Además entraron <strong>${fmtMoney(totalDomBanco)}</strong> de domicilios por banco (se le pagan al domiciliario en efectivo).`:''}</p>
   ${porVerificar.length>0?`<div class="card" style="border:1px solid var(--orange);background:rgba(230,126,34,0.08);">
     <div class="flex-between"><span class="text-orange font-bold">${ic('i-warning')} ${porVerificar.length} pago(s) SIN verificar — ${fmtMoney(montoPorVerificar)}</span></div>
-    <p class="text-xs text-gray mt-1">Estos pagos (Banco/Llave) todavía NO cuentan en el cuadre porque faltan verificar. Ve a Pedidos y dale "Verificar" a cada uno cuando confirmes el comprobante. Si no los verificas, la caja se descuadra.</p>
+    <p class="text-xs text-gray mt-1">Estos pagos (Banco/Tarjeta) todavía NO cuentan en el cuadre porque faltan verificar. Ve a Pedidos y dale "Verificar" a cada uno cuando confirmes el comprobante. Si no los verificas, la caja se descuadra.</p>
   </div>`:''}
+  ${(()=>{ const desc=(DB.get('ventas')||[]).filter(v=>v.cajaId===c.id && pagoDescuadrado(v)); return desc.length?`<div class="card" style="border:1px solid var(--red-light);background:rgba(231,76,60,0.08);">
+    <span class="text-red font-bold">${ic('i-warning')} ${desc.length} pedido(s) con el pago descuadrado: ${desc.map(v=>escapeHtml(refPedido(v))).join(', ')}</span>
+    <p class="text-xs text-gray mt-1">Se modificaron después de cobrar. En Pedidos use el botón rojo de cambiar forma de pago para cobrar o devolver la diferencia.</p></div>`:''; })()}
   <div class="grid-2">
     <div class="card"><div class="card-title">${ic('i-cash')} Resumen de Caja — ${escapeHtml(c.cajero)}</div>
       <div class="flex-between" style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span>Apertura</span><span class="text-sm">${fmtDate(c.apertura)}</span></div>
@@ -2328,7 +2405,7 @@ function caja(){
           ${vs.filter(v=>v.valorDom>0).map(v=>{
             const ba=v.pagos?(v.pagos.banco||0):0;
             const ef=v.pagos?(v.pagos.efectivo||0):0;
-            const entra=v.domEntraCaja;
+            const entra=!!v.domPorBanco;
             return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.05);${!entra&&ba>0?'background:rgba(231,76,60,0.12);':''}">
               <div class="flex-between"><span>${escapeHtml(refPedido(v))}</span><span>dom ${fmtMoney(v.valorDom)}</span></div>
               <div class="text-gray" style="font-size:10px;">forma dom: <strong>${v.domFormaPago||'NO MARCADO'}</strong> · entra a caja: ${entra?'SÍ':'NO'} · pagó: ef ${fmtMoney(ef)}${ba?' · banco '+fmtMoney(ba):''}${!entra&&ba>0?' · ⚠ domicilio por banco NO marcado':''}</div>
@@ -2470,7 +2547,7 @@ function toggleEmpleadoField(){
 function cerrarCaja(){
   const c=DB.get('caja_actual'); if(!c) return;
   // Avisar si quedan pedidos sin cobrar en esta caja (para no dejarlos "colgados")
-  const sinCobrar=(DB.get('ventas')||[]).filter(v=>v.cajaId===c.id && (v.estado==='abierta'||v.estado==='por_verificar'));
+  const sinCobrar=(DB.get('ventas')||[]).filter(v=>v.cajaId===c.id && (v.estado==='abierta'||v.estado==='por_verificar'||pagoDescuadrado(v)));
   if(sinCobrar.length>0){
     const refs=sinCobrar.map(v=>refPedido(v)).join(', ');
     if(!confirm(`⚠ Hay ${sinCobrar.length} pedido(s) SIN COBRAR en esta caja:\n${refs}\n\nSi cierras la caja, esos pedidos se quedarán sin cobrar y saldrán de la vista de pedidos.\n\n¿Cerrar de todos modos? (Cancela si quieres cobrarlos primero)`)) return;
@@ -2633,8 +2710,8 @@ function cuadredomi(){
 
   <div class="stats-grid">
     <div class="stat-card green"><div class="stat-label">Comida en efectivo</div><div class="stat-value">${fmtMoney(tot.comidaEf)}</div><div class="stat-sub">deben entregar los mensajeros</div></div>
-    <div class="stat-card blue"><div class="stat-label">Comida por banco</div><div class="stat-value">${fmtMoney(tot.comidaBanco)}</div><div class="stat-sub">ya está en la cuenta</div></div>
-    <div class="stat-card gold"><div class="stat-label">Domicilios (para ellos)</div><div class="stat-value">${fmtMoney(tot.domEf+tot.domBanco)}</div><div class="stat-sub">efectivo ${fmtMoney(tot.domEf)} · banco ${fmtMoney(tot.domBanco)}</div></div>
+    <div class="stat-card blue"><div class="stat-label">Comida por banco/tarjeta</div><div class="stat-value">${fmtMoney(tot.comidaBanco+tot.comidaTarjeta)}</div><div class="stat-sub">ya está en la cuenta</div></div>
+    <div class="stat-card gold"><div class="stat-label">Domicilios (para ellos)</div><div class="stat-value">${fmtMoney(tot.domEf+tot.domBanco)}</div><div class="stat-sub">efectivo ${fmtMoney(tot.domEf)} · banco/tarjeta ${fmtMoney(tot.domBanco)}</div></div>
     <div class="stat-card"><div class="stat-label">Domicilios entregados</div><div class="stat-value">${tot.pedidos}</div><div class="stat-sub">${lista.length} mensajero(s)</div></div>
   </div>
 
@@ -2690,7 +2767,7 @@ function cuadredomi(){
               <td class="font-bold">${escapeHtml(v.factura||refPedido(v))}</td>
               <td>${escapeHtml(v.cliNombre||'—')}${v.cliTel?`<br><span class="text-gray" style="font-size:11px;">${escapeHtml(v.cliTel)}</span>`:''}</td>
               <td>${fmtMoney(v.comida!==undefined?v.comida:v.total)}</td>
-              <td class="text-gold">${fmtMoney(v.valorDom||0)}${v.domPorBanco?' <span class="badge badge-blue" style="font-size:9px;">banco</span>':''}</td>
+              <td class="text-gold">${fmtMoney(v.valorDom||0)}${v.domPorBanco?` <span class="badge badge-blue" style="font-size:9px;">${v.domFormaPago==='tarjeta'?'tarjeta':'banco'}</span>`:''}</td>
               <td>${escapeHtml(metodoTxt.trim())}</td>
               <td class="text-gray" style="font-size:12px;">${(v.fecha||'').substring(11,16)}</td>
             </tr>`;
@@ -2870,7 +2947,7 @@ function renderHistTable(vs){
   const list=vs.filter(v=>!q||(v.factura||'').toLowerCase().includes(q)||(v.cliNombre||'').toLowerCase().includes(q)||(v.cliTel||'').includes(q)||(v.domiciliario||'').toLowerCase().includes(q)||(v.mesa||'').toLowerCase().includes(q));
   if(list.length===0) return `<div class="empty-state">${ic('i-empty')}<p>Sin resultados${q?' para "'+escapeHtml(q)+'"':''}</p></div>`;
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido</th><th>Tipo</th><th>Cliente/Mesa</th><th>Subtotal</th><th>Desc.</th><th>Total</th><th>Método</th><th>Estado</th><th>Fecha</th><th></th></tr></thead><tbody>
-  ${list.map(v=>`<tr style="${v.estado==='anulada'?'opacity:.4':''}"><td><span class="text-gold font-bold">${refPedido(v)}</span>${v.estado==='anulada'?'<br><span class="text-xs text-red">(ANULADA)</span>':''}</td><td>${tipoLabel(v.tipo)}</td><td>${escapeHtml(v.cliNombre||v.mesa||'—')}</td><td>${fmtMoney(v.subtotal||v.total)}</td><td>${v.descuento>0?fmtMoney(v.descuento):'—'}</td><td class="font-bold">${fmtMoney(v.total)}</td><td>${v.metodo||'—'}</td><td>${estadoBadge(v.estado)}</td><td class="text-xs text-gray">${fmtDate(v.fecha)}</td><td><button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')">${ic('i-print')}</button></td></tr>`).join('')}
+  ${list.map(v=>`<tr style="${v.estado==='anulada'?'opacity:.4':''}"><td><span class="text-gold font-bold">${refPedido(v)}</span>${v.estado==='anulada'?'<br><span class="text-xs text-red">(ANULADA)</span>':''}</td><td>${tipoLabel(v.tipo)}</td><td>${escapeHtml(v.cliNombre||v.mesa||'—')}</td><td>${fmtMoney(v.subtotal||v.total)}</td><td>${v.descuento>0?fmtMoney(v.descuento):'—'}</td><td class="font-bold">${fmtMoney(v.total)}</td><td>${v.metodo||'—'}</td><td>${estadoBadge(v.estado)}</td><td class="text-xs text-gray">${fmtDate(v.fecha)}</td><td><button class="btn btn-ghost btn-sm" onclick="reimprimir('${v.id}')">${ic('i-print')}</button>${puedeEditarPago(v)?`<button class="btn btn-ghost btn-sm" onclick="abrirEditarPago('${v.id}')" title="Cambiar forma de pago">${ic('i-cash')}✎</button>`:''}</td></tr>`).join('')}
   </tbody></table></div>`;
 }
 
@@ -4008,40 +4085,51 @@ function buildModals(){
   <div id="modal-cierre" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3>${ic('i-lock')} Cierre y Cuadre de Caja</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cierre')">${ic('i-close')}</button></div><div class="modal-body"><div class="flex-between mb-2" style="padding:8px 12px;background:rgba(212,175,55,0.08);border-radius:8px;"><span class="text-sm">Efectivo que debería haber</span><span class="text-gold font-bold" id="cierre-esperado">—</span></div><div class="form-group"><label>Efectivo contado en el cajón (COP)</label><input type="number" id="cierre-contado" placeholder="Cuente la plata y escriba el total" oninput="calcularDiferencia()"><div class="text-xs text-gold" id="cierre-contado-prev" style="margin-top:3px;min-height:14px;"></div></div><div style="text-align:center;font-size:16px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.2);margin-bottom:12px;" id="cierre-dif"><span class="text-gray">Cuente el efectivo del cajón</span></div><div class="form-group"><label>Observaciones (opcional)</label><input type="text" id="cierre-obs" placeholder="Ej: motivo del faltante"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cierre')">Cancelar</button><button class="btn btn-danger" onclick="confirmarCierre()">${ic('i-lock')} Cerrar Caja</button></div></div></div>
 
   <div id="modal-quitarprod" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-menu-food')} Quitar Producto</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-quitarprod')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm text-gray mb-2" id="quitarprod-info"></p><p class="text-xs text-gray mb-2">Al quitar un producto, el total se recalcula y los pagos se ajustan automáticamente. Queda en auditoría.</p><div id="quitarprod-lista"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-quitarprod')">Cerrar</button></div></div></div>
-  <div id="modal-editpago" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>${ic('i-cash')} Editar Forma de Pago</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-editpago')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="editpago-info"></p>
-    <p class="text-xs text-gray mb-2">Cambie cómo pagó el cliente. El total debe seguir igual. Queda registrado en auditoría.</p>
-    <div class="form-grid-2">
-      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="editpago-efectivo" placeholder="0" oninput="actualizarEditPago()"></div>
-      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="editpago-tarjeta" placeholder="0" oninput="actualizarEditPago()"></div>
-      <div class="form-group" style="grid-column:1/-1"><label>Banco</label><input type="number" inputmode="numeric" id="editpago-banco" placeholder="0" oninput="actualizarEditPago()"></div>
-    </div>
-    <div style="text-align:center;font-size:13px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.2);" id="editpago-msg">—</div>
-    </div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-editpago')">Cancelar</button><button class="btn btn-gold" onclick="guardarEditPago()">${ic('i-check')} Guardar</button></div></div></div>
-  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:440px;"><div class="modal-header"><h3>${ic('i-cash')} Cobrar</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-cobro')">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p>
+  <div id="modal-cobro" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:470px;"><div class="modal-header"><h3 id="cobro-titulo">${ic('i-cash')} Cobrar</h3><button class="btn btn-icon btn-ghost" onclick="cerrarCobro()">${ic('i-close')}</button></div><div class="modal-body"><p class="text-sm mb-2" id="cobro-mesa-info"></p>
+    <div id="cobro-ajuste" class="text-xs" style="display:none;padding:8px 10px;border-radius:8px;margin-bottom:10px;background:rgba(230,126,34,0.10);border:1px solid rgba(230,126,34,0.35);line-height:1.5;"></div>
     <div class="form-grid-2">
       <div class="form-group"><label>Propina (del mesero)</label><input type="number" inputmode="numeric" id="cobro-propina" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
-      <div class="form-group"><label>Recargo datáfono</label><input type="number" inputmode="numeric" id="cobro-recargo" placeholder="0" value="0" min="0" oninput="actualizarTotalCobro()"></div>
+      <div class="form-group"><label>¿Cómo paga la propina?</label><select id="cobro-propina-metodo" onchange="actualizarTotalCobro()">${opcionesMetodo('efectivo')}</select></div>
     </div>
-    <p class="text-xs text-gray mb-2" style="margin-top:-4px;">La propina y el recargo NO son del negocio: no entran a caja ni a ventas.</p>
     <div id="cobro-domicilio-box" style="display:none;background:rgba(52,152,219,0.08);border-radius:8px;padding:10px;margin-bottom:10px;">
       <label class="text-sm" style="display:block;margin-bottom:6px;">🛵 Domicilio: <span id="cobro-dom-valor" class="text-gold">0</span> — ¿cómo lo paga el cliente?</label>
       <select id="cobro-dom-forma" class="mini-input" style="width:100%;" onchange="actualizarTotalCobro()">
-        <option value="efectivo_directo">EFECTIVO — el cliente le paga directo al domiciliario (NO entra a caja)</option>
-        <option value="banco">BANCO — entra a mi banco (yo le pago al domiciliario en efectivo del cajón)</option>
+        <option value="efectivo_directo">EFECTIVO — se lo paga directo al domiciliario (no entra a caja)</option>
+        <option value="banco">BANCO — junto con la comida por transferencia</option>
+        <option value="tarjeta">TARJETA — junto con la comida por datáfono</option>
       </select>
       <p class="text-xs text-gray mt-1" id="cobro-dom-ayuda"></p>
     </div>
-    <div class="flex-between mb-2" style="font-size:16px;font-weight:700;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>Total a cobrar <span class="text-xs text-gray" id="cobro-que-cobrar"></span></span><span class="text-gold" id="cobro-total-final">—</span></div>
+    <div class="flex-between mb-2" style="font-size:14px;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>Valor del pedido <span class="text-xs text-gray" id="cobro-que-cobrar"></span></span><strong id="cobro-total-base">—</strong></div>
     <label class="text-sm" style="display:block;margin-bottom:6px;">¿Cómo paga el cliente?</label>
-    <p class="text-xs text-gray mb-2">Escriba cuánto paga en cada forma. Puede combinar varias. Deje en 0 las que no use.</p>
-    <div class="form-grid-2">
-      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="pago-efectivo" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-efectivo" style="margin-top:2px;min-height:14px;"></div></div>
-      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="pago-tarjeta" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-tarjeta" style="margin-top:2px;min-height:14px;"></div></div>
-      <div class="form-group" style="grid-column:1/-1"><label>Banco <span class="text-xs text-gray">(transferencia)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarRepartoCobro()"><div class="text-xs text-gold" id="prev-banco" style="margin-top:2px;min-height:14px;"></div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="pagoRapido('efectivo')">Todo efectivo</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="pagoRapido('tarjeta')">Todo tarjeta</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="pagoRapido('banco')">Todo banco</button>
     </div>
+    <p class="text-xs text-gray mb-2">O escriba cuánto paga en cada forma para combinar. Los montos van <strong>sin</strong> el recargo del datáfono.</p>
+    <div class="form-grid-2">
+      <div class="form-group"><label>Efectivo</label><input type="number" inputmode="numeric" id="pago-efectivo" placeholder="0" oninput="actualizarTotalCobro()"><div class="text-xs text-gold" id="prev-efectivo" style="margin-top:2px;min-height:14px;"></div></div>
+      <div class="form-group"><label>Tarjeta</label><input type="number" inputmode="numeric" id="pago-tarjeta" placeholder="0" oninput="actualizarTotalCobro()"><div class="text-xs text-gold" id="prev-tarjeta" style="margin-top:2px;min-height:14px;"></div></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Banco <span class="text-xs text-gray">(transferencia)</span></label><input type="number" inputmode="numeric" id="pago-banco" placeholder="0" oninput="actualizarTotalCobro()"><div class="text-xs text-gold" id="prev-banco" style="margin-top:2px;min-height:14px;"></div></div>
+    </div>
+    <div id="cobro-recargo-box" style="display:none;background:rgba(155,89,182,0.08);border-radius:8px;padding:10px;margin-bottom:10px;">
+      <label class="text-sm" style="display:block;margin-bottom:6px;">💳 Recargo datáfono <span class="text-xs text-gray" id="cobro-recargo-base"></span></label>
+      <div class="form-grid-2">
+        <div class="form-group" style="margin-bottom:0;"><label>% de recargo</label><input type="number" inputmode="decimal" step="0.1" id="cobro-recargo-pct" placeholder="Ej: 7" oninput="recargoDesde('pct')"></div>
+        <div class="form-group" style="margin-bottom:0;"><label>o total pasado por datáfono</label><input type="number" inputmode="numeric" id="cobro-datafono" placeholder="Con recargo" oninput="recargoDesde('total')"></div>
+      </div>
+      <p class="text-xs mt-1" id="cobro-recargo-txt"></p>
+    </div>
+    <div id="cobro-efectivo-box" style="display:none;background:rgba(46,204,113,0.07);border-radius:8px;padding:10px;margin-bottom:10px;">
+      <div class="form-grid-2" style="align-items:end;">
+        <div class="form-group" style="margin-bottom:0;"><label>Recibido en efectivo</label><input type="number" inputmode="numeric" id="cobro-recibido" placeholder="Opcional" oninput="actualizarTotalCobro()"></div>
+        <div style="padding-bottom:10px;font-size:15px;" id="cobro-vueltas"></div>
+      </div>
+    </div>
+    <div class="flex-between mb-2" style="font-size:17px;font-weight:700;border-top:1px solid rgba(212,175,55,0.15);padding-top:10px;"><span>TOTAL A COBRAR</span><span class="text-gold" id="cobro-total-final">—</span></div>
     <div style="text-align:center;font-size:13px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.2);" id="cobro-reparto-msg">—</div>
-    </div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-cobro')">Cancelar</button><button class="btn btn-gold" id="btn-confirmar-cobro" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar</button></div></div></div>
-
+    </div><div class="modal-footer"><button class="btn btn-ghost" onclick="cerrarCobro()">Cancelar</button><button class="btn btn-gold" id="btn-confirmar-cobro" onclick="confirmarCobroMesa()">${ic('i-check')} Cobrar</button></div></div></div>
   <div id="modal-empleado" style="display:none;" class="modal-overlay"><div class="modal"><div class="modal-header"><h3 id="modal-emp-title">${ic('i-users')} Nuevo Empleado</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-empleado')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-emp-id"><div class="form-grid-2"><div class="form-group" style="grid-column:1/-1"><label>Nombre completo</label><input type="text" id="e-nombre"></div><div class="form-group"><label>Cédula</label><input type="text" id="e-cedula" inputmode="numeric"></div><div class="form-group"><label>Código (para marcar)</label><input type="text" id="e-codigo" inputmode="numeric" placeholder="Ej: 1234"></div></div><p class="text-xs text-gray mt-1">El empleado usará su cédula y este código en la pantalla de marcación de entrada/salida.</p></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-empleado')">Cancelar</button><button class="btn btn-gold" onclick="saveEmpleado()">Guardar</button></div></div></div>
 
   <div id="modal-marcacion" style="display:none;" class="modal-overlay"><div class="modal" style="max-width:420px;"><div class="modal-header"><h3 id="modal-mc-title">${ic('i-clock')} Agregar Marcación</h3><button class="btn btn-icon btn-ghost" onclick="closeModal('modal-marcacion')">${ic('i-close')}</button></div><div class="modal-body"><input type="hidden" id="edit-mc-id"><div class="form-group"><label>Empleado</label><select id="mc-emp"></select></div><div class="form-grid-2"><div class="form-group"><label>Tipo</label><select id="mc-tipo"><option value="entrada">Entrada</option><option value="salida">Salida</option></select></div><div class="form-group"><label>Fecha y hora</label><input type="datetime-local" id="mc-fecha"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('modal-marcacion')">Cancelar</button><button class="btn btn-gold" onclick="saveMarcacion()">Guardar</button></div></div></div>
